@@ -178,21 +178,27 @@ function actionCell(lead, next, today) {
 }
 
 function rankLead(lead, next, today) {
+  const stillPursuing = !["client", "dead"].includes(lead.stage);
+  const priorityBit = (lead.priority && stillPursuing) ? 0 : 1;
+
+  let stageRank, dateRank = 0;
   if (lead.stage === "contacted") {
     if (next && !next.exhausted) {
       const diff = daysDiff(next.date, today);
-      if (diff < 0) return [0, diff];  // overdue, most overdue first
-      if (diff === 0) return [1, 0];   // due today
-      return [2, diff];                 // upcoming, soonest first
+      if (diff < 0) { stageRank = 0; dateRank = diff; }        // overdue, most overdue first
+      else if (diff === 0) { stageRank = 1; }                   // due today
+      else { stageRank = 2; dateRank = diff; }                  // upcoming, soonest first
+    } else {
+      stageRank = 3; // sequence exhausted, no reply yet — needs a manual follow-up
     }
-    return [3, 0]; // sequence exhausted, no reply yet — needs a manual follow-up
-  }
-  if (lead.stage === "responded") return [4, 0];
-  if (lead.stage === "conversation") return [5, 0];
-  if (lead.stage === "sampling") return [6, 0];
-  if (lead.stage === "prospect") return [7, 0];
-  if (lead.stage === "client") return [8, 0];
-  return [9, 0]; // dead
+  } else if (lead.stage === "responded") stageRank = 4;
+  else if (lead.stage === "conversation") stageRank = 5;
+  else if (lead.stage === "sampling") stageRank = 6;
+  else if (lead.stage === "prospect") stageRank = 7;
+  else if (lead.stage === "client") stageRank = 8;
+  else stageRank = 9; // dead
+
+  return [priorityBit, stageRank, dateRank];
 }
 
 async function loadOutboundStats() {
@@ -211,7 +217,7 @@ async function loadOutboundStats() {
 function renderCrm() {
   const today = new Date();
   const enriched = leads.map(l => { const next = computeNextAction(l, today); return { lead: l, next, rank: rankLead(l, next, today) }; });
-  enriched.sort((a, b) => a.rank[0] - b.rank[0] || a.rank[1] - b.rank[1]);
+  enriched.sort((a, b) => a.rank[0] - b.rank[0] || a.rank[1] - b.rank[1] || a.rank[2] - b.rank[2]);
 
   const total = leads.length;
   const counts = {};
@@ -238,8 +244,8 @@ function renderCrm() {
     return;
   }
   const rows = enriched.map(({ lead, next }) => `
-    <tr>
-      <td class="company">${escapeHtml(lead.company)}</td>
+    <tr class="${lead.priority ? "priority-row" : ""}">
+      <td class="company">${lead.priority ? '<span class="star" title="Priority">&#9733;</span>' : ""}${escapeHtml(lead.company)}</td>
       <td>${escapeHtml(lead.contact)}</td>
       <td class="muted">${escapeHtml(lead.email)}</td>
       <td>${escapeHtml(lead.product)}</td>

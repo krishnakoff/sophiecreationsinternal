@@ -74,6 +74,13 @@ Table `public.leads`. A lead moves through `stage`:
 - **`dead`** — set `lost_reason` if you're told why (no budget, went silent, chose a competitor,
   not a fit).
 
+**`priority`** (boolean, default false) is separate from stage — set it when told a lead is
+worth pushing hard on ("favourite this one", "don't let this go cold"). It pins the lead to the
+top of the table with a star, regardless of what stage it's in. Leave it set until the lead
+closes (`client`) or explicitly declines (`dead` + a real reason) — don't clear it just because
+follow-up is slow or they've gone quiet for a bit. Put the *why* in `notes` when you set it
+("perfect match, push to close") so the reason is visible, not just the flag.
+
 Insert a new prospect via the REST API with the service_role key:
 
 ```bash

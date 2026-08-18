@@ -142,6 +142,9 @@ td{ padding:11px 14px; border-bottom:1px solid var(--hairline); vertical-align:t
 tbody tr:last-child td{ border-bottom:none; }
 tbody tr:hover td{ background:var(--panel-2); }
 .company{ font-weight:600; }
+.priority-row td{ background:var(--accent-tint); }
+.priority-row:hover td{ background:var(--accent-tint); }
+.star{ color:var(--accent); margin-right:6px; font-size:12px; }
 .muted{ color:var(--muted); }
 .notes-cell{ max-width:260px; color:var(--muted); font-size:12.5px; }
 

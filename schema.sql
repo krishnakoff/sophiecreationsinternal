@@ -24,6 +24,7 @@ create table if not exists public.leads (
   stage text not null default 'prospect'
     check (stage in ('prospect', 'contacted', 'responded', 'conversation', 'sampling', 'client', 'dead')),
   lost_reason text,
+  priority boolean not null default false,
   notes text default '',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
