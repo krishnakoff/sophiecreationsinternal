@@ -55,7 +55,26 @@ on the other's data. Writes must stay scoped to whoever is actually chatting.
 
 ## Adding a CRM lead
 
-Table `public.leads`. Insert via the REST API with the service_role key:
+Table `public.leads`. A lead moves through `stage`:
+
+`prospect` -> `contacted` -> `responded` -> `conversation` -> `sampling` -> `client`
+(`dead` is reachable from any stage, with an optional `lost_reason`).
+
+- **`prospect`** — identified as worth reaching out to (by research, Apollo, Google, a
+  referral), but no email has gone out yet. This is the default for anything added from a
+  "here's a company we should target" conversation.
+- **`contacted`** — the first outbound email has actually gone out. Don't set this by hand from
+  a chat request like "add this lead" — it gets set automatically by the outbound-email scan
+  below, which stamps `contacted_at` and starts the day 1/4/7/10 cadence
+  (`steps_completed`, 0–4, tracks how far through it they are).
+- **`responded` / `conversation` / `sampling` / `client`** — manual judgment calls. Advance
+  these when told to ("they replied and we're talking now" -> `conversation`; "sample's out the
+  door" -> `sampling`; "they signed" -> `client`). `next_action_date` + `next_action_type`
+  (`"email"` or `"call"`) hold the manual next step once a lead is past `contacted`.
+- **`dead`** — set `lost_reason` if you're told why (no budget, went silent, chose a competitor,
+  not a fit).
+
+Insert a new prospect via the REST API with the service_role key:
 
 ```bash
 SUPABASE_URL=$(grep ^SUPABASE_URL .env | cut -d= -f2-)
@@ -66,21 +85,51 @@ curl -s -X POST "$SUPABASE_URL/rest/v1/leads" \
   -d '{
     "owner_id": "<the chatting person'"'"'s id>",
     "company": "...", "contact": "...", "email": "...", "product": "...",
-    "added_date": "YYYY-MM-DD",
-    "steps_completed": 0,
-    "mode": "sequence",
-    "status": "active",
+    "stage": "prospect",
     "notes": "..."
   }'
 ```
 
-Field notes:
-- `mode`: `"sequence"` (auto day 1/4/7/10 email→call→email→call cadence from `added_date`) or
-  `"snoozed"` (manually set `next_action_date` + `next_action_type` instead).
-- `steps_completed`: 0–4, how far through the sequence they are.
-- `status`: `"active"`, `"dead"`, or `"client"`.
-- Updating an existing lead (marking a step done, snoozing, closing as client/dead) is a PATCH
-  to `$SUPABASE_URL/rest/v1/leads?id=eq.<id>` with just the changed fields.
+Updating an existing lead (advancing its stage, setting a manual next action, marking
+dead+reason) is a PATCH to `$SUPABASE_URL/rest/v1/leads?id=eq.<id>` with just the changed
+fields.
+
+## Detecting outbound emails (Gmail scan)
+
+When asked to check outbound activity (e.g. "how'd outbound look this week", "log this week's
+emails"), this only works from a session with that person's Gmail connected via MCP — it reads
+their own Sent mail, not a shared inbox. Run this on request; it isn't scheduled.
+
+For each message in Sent since the last scan (ask what date to start from the first time; after
+that, use the latest `sent_at` already in `outbound_emails` for that owner):
+
+1. **Skip replies.** Only count a message if it's the first message in its thread — i.e. this
+   person sent it, nobody emailed them first. A reply to an inbound email is not an outbound
+   attempt.
+2. **Check if the recipient is new.** Search Sent for `to:<address>` — if this message is the
+   only (or earliest) one to that address, it's a first-time outbound attempt.
+3. **Log it**: insert into `outbound_emails` — `owner_id` (the mailbox owner), `recipient_email`,
+   `thread_id`, `sent_at`. Match `lead_id` if the recipient email already exists on a `leads`
+   row for that owner.
+4. **Flip stage if there's a matching lead**: `prospect` -> `contacted` (stamp `contacted_at` =
+   the send date, `steps_completed` = 1). If there's no matching lead at all, don't invent one —
+   flag it back to the person ("emailed X at newcompany.com, no lead on file — add it?") rather
+   than silently creating a CRM entry for an address you don't have context on.
+5. **Check for replies** on threads already in `contacted` stage: if anything after the first
+   outbound message is from someone other than the account owner, flip that lead
+   `contacted` -> `responded` and stamp `responded_at`. This is mechanical (reply exists or it
+   doesn't) — don't read the reply's content to judge quality or sentiment, that's a manual call
+   for `conversation`/`sampling`/`client`.
+
+```bash
+curl -s -X POST "$SUPABASE_URL/rest/v1/outbound_emails" \
+  -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"owner_id": "<id>", "recipient_email": "...", "lead_id": "<id or null>", "thread_id": "...", "sent_at": "ISO timestamp"}'
+```
+
+The web app's "Outbound this week" widget and the CRM stage cards read straight off this table
+and `leads.stage` — no further wiring needed once these are logged correctly.
 
 ## Adding/updating a to-do item
 

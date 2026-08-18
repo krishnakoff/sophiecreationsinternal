@@ -24,8 +24,16 @@ It's plain HTML/CSS/JS — no build step, no framework. Edit a file, commit, pus
 
 ## Data model
 
-- **`leads`** — one row per company. `steps_completed` (0–4) and `mode` (`sequence` or `snoozed`) drive the day 1 / 4 / 7 / 10 outreach cadence shown in the "Next action" column.
+- **`leads`** — one row per company, moving through a `stage`: `prospect` -> `contacted` ->
+  `responded` -> `conversation` -> `sampling` -> `client` (`dead`, with an optional
+  `lost_reason`, is reachable from any stage). `contacted_at` + `steps_completed` (0–4) drive
+  the day 1 / 4 / 7 / 10 auto follow-up cadence shown in the "Next action" column while a lead
+  is `contacted`; past that, `next_action_date`/`next_action_type` are the manual "what's next"
+  fields. `prospect` -> `contacted` and `contacted` -> `responded` are flipped automatically by
+  Claude scanning Gmail (see `CLAUDE.md`); `conversation`/`sampling`/`client`/`dead` are manual
+  calls.
 - **`todo_items`** — one row per task, grouped by `tier` (1–6, matching the priority sections) and ordered by `position` within it.
-- Both tables have an **`owner_id`**. Everyone signed in can read every row (so you can check in on each other), but row-level security only lets you insert/update/delete rows you own. The topbar's name switcher picks whose data the page is showing; the other person's view is read-only.
+- **`outbound_emails`** — one row per first-time-recipient email detected in Gmail (sender, recipient, thread, timestamp). Feeds the weekly "who emailed how many new contacts" rollup and drives the stage auto-flips above.
+- All three tables have an **`owner_id`**. Everyone signed in can read every row (so you can check in on each other), but row-level security only lets you insert/update/delete rows you own. The topbar's name switcher picks whose data the page is showing; the other person's view is read-only.
 
-Both tables are realtime-enabled, so any change — a checkbox, an edited line, a new lead — appears for everyone with the page open, instantly, no refresh needed.
+All three tables are realtime-enabled, so any change — a checkbox, an edited line, a new lead, a logged email — appears for everyone with the page open, instantly, no refresh needed.

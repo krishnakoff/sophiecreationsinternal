@@ -4,6 +4,10 @@
 create extension if not exists pgcrypto;
 
 -- ---------- leads (Outreach CRM) ----------
+-- stage lifecycle: prospect -> contacted -> responded -> conversation -> sampling -> client
+-- (dead is reachable from any stage). contacted_at drives the day 1/4/7/10 auto follow-up
+-- cadence; next_action_date/next_action_type are the manual "what's next" fields once a lead
+-- is past the auto-cadence stage (responded/conversation/sampling).
 create table if not exists public.leads (
   id uuid primary key default gen_random_uuid(),
   owner_id uuid references auth.users(id) default auth.uid(),
@@ -12,14 +16,31 @@ create table if not exists public.leads (
   email text default '',
   product text default '',
   added_date date not null default current_date,
+  contacted_at date,
+  responded_at timestamptz,
   steps_completed int not null default 0,
-  mode text not null default 'sequence' check (mode in ('sequence', 'snoozed')),
   next_action_date date,
   next_action_type text check (next_action_type in ('email', 'call')),
-  status text not null default 'active' check (status in ('active', 'dead', 'client')),
+  stage text not null default 'prospect'
+    check (stage in ('prospect', 'contacted', 'responded', 'conversation', 'sampling', 'client', 'dead')),
+  lost_reason text,
   notes text default '',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
+);
+
+-- ---------- outbound_emails (per-person log of first-time-recipient emails) ----------
+-- Populated by Claude scanning Gmail on request (see CLAUDE.md) — not written by the web app.
+-- Drives the weekly "who reached out to how many people" rollup and flips a lead from
+-- prospect -> contacted (first outbound) and contacted -> responded (a reply lands in the thread).
+create table if not exists public.outbound_emails (
+  id uuid primary key default gen_random_uuid(),
+  owner_id uuid not null references auth.users(id) default auth.uid(),
+  recipient_email text not null,
+  lead_id uuid references public.leads(id) on delete set null,
+  thread_id text,
+  sent_at timestamptz not null,
+  created_at timestamptz not null default now()
 );
 
 -- ---------- todo_items (Priority list) ----------
@@ -55,6 +76,7 @@ create trigger todo_items_touch_updated_at before update on public.todo_items
 -- ---------- row level security: everyone signed in can read everything; you can only write your own rows ----------
 alter table public.leads enable row level security;
 alter table public.todo_items enable row level security;
+alter table public.outbound_emails enable row level security;
 
 drop policy if exists "authenticated full access" on public.leads;
 drop policy if exists "authenticated read all" on public.leads;
@@ -84,12 +106,29 @@ create policy "authenticated update own" on public.todo_items
 create policy "authenticated delete own" on public.todo_items
   for delete using (auth.uid() = owner_id);
 
+drop policy if exists "authenticated read all" on public.outbound_emails;
+drop policy if exists "authenticated insert own" on public.outbound_emails;
+drop policy if exists "authenticated update own" on public.outbound_emails;
+drop policy if exists "authenticated delete own" on public.outbound_emails;
+create policy "authenticated read all" on public.outbound_emails
+  for select using (auth.role() = 'authenticated');
+create policy "authenticated insert own" on public.outbound_emails
+  for insert with check (auth.uid() = owner_id);
+create policy "authenticated update own" on public.outbound_emails
+  for update using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+create policy "authenticated delete own" on public.outbound_emails
+  for delete using (auth.uid() = owner_id);
+
 create index if not exists leads_owner_id_idx on public.leads(owner_id);
 create index if not exists todo_items_owner_id_idx on public.todo_items(owner_id);
+create index if not exists outbound_emails_owner_id_idx on public.outbound_emails(owner_id);
+create index if not exists outbound_emails_sent_at_idx on public.outbound_emails(sent_at);
+create index if not exists outbound_emails_recipient_idx on public.outbound_emails(recipient_email);
 
 -- ---------- realtime: push live changes to every connected browser ----------
 alter publication supabase_realtime add table public.leads;
 alter publication supabase_realtime add table public.todo_items;
+alter publication supabase_realtime add table public.outbound_emails;
 
 -- ---------- seed the 30 priority items (safe to run once; skipped if already seeded) ----------
 -- Requires the admin account (Sanjay) to already exist (Authentication -> Users -> Add user, email sanjay@sophiecreations.net).
