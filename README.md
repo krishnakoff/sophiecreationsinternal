@@ -1,4 +1,4 @@
-# Loupe
+# Sophie
 
 Shared outreach CRM + daily priority tracker. Plain HTML/CSS/JS frontend, [Supabase](https://supabase.com) as the backend (Postgres + auth + realtime), hosted free on GitHub Pages.
 

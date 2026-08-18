@@ -56,6 +56,7 @@ button{ font-family:inherit; }
 .login-screen{
   min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px;
 }
+.login-screen[hidden]{ display:none; }
 .login-card{
   width:100%; max-width:340px; background:var(--panel); border:1px solid var(--hairline);
   border-radius:12px; padding:28px; box-shadow:var(--shadow);
