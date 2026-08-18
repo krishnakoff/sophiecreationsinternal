@@ -6,6 +6,7 @@ create extension if not exists pgcrypto;
 -- ---------- leads (Outreach CRM) ----------
 create table if not exists public.leads (
   id uuid primary key default gen_random_uuid(),
+  owner_id uuid references auth.users(id) default auth.uid(),
   company text not null,
   contact text default '',
   email text default '',
@@ -24,6 +25,7 @@ create table if not exists public.leads (
 -- ---------- todo_items (Priority list) ----------
 create table if not exists public.todo_items (
   id uuid primary key default gen_random_uuid(),
+  owner_id uuid not null references auth.users(id) default auth.uid(),
   tier int not null,
   position int not null,
   title text not null,
@@ -50,25 +52,50 @@ drop trigger if exists todo_items_touch_updated_at on public.todo_items;
 create trigger todo_items_touch_updated_at before update on public.todo_items
   for each row execute function public.touch_updated_at();
 
--- ---------- row level security: any signed-in team member can read/write everything ----------
+-- ---------- row level security: everyone signed in can read everything; you can only write your own rows ----------
 alter table public.leads enable row level security;
 alter table public.todo_items enable row level security;
 
 drop policy if exists "authenticated full access" on public.leads;
-create policy "authenticated full access" on public.leads
-  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+drop policy if exists "authenticated read all" on public.leads;
+drop policy if exists "authenticated insert own" on public.leads;
+drop policy if exists "authenticated update own" on public.leads;
+drop policy if exists "authenticated delete own" on public.leads;
+create policy "authenticated read all" on public.leads
+  for select using (auth.role() = 'authenticated');
+create policy "authenticated insert own" on public.leads
+  for insert with check (auth.uid() = owner_id);
+create policy "authenticated update own" on public.leads
+  for update using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+create policy "authenticated delete own" on public.leads
+  for delete using (auth.uid() = owner_id);
 
 drop policy if exists "authenticated full access" on public.todo_items;
-create policy "authenticated full access" on public.todo_items
-  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+drop policy if exists "authenticated read all" on public.todo_items;
+drop policy if exists "authenticated insert own" on public.todo_items;
+drop policy if exists "authenticated update own" on public.todo_items;
+drop policy if exists "authenticated delete own" on public.todo_items;
+create policy "authenticated read all" on public.todo_items
+  for select using (auth.role() = 'authenticated');
+create policy "authenticated insert own" on public.todo_items
+  for insert with check (auth.uid() = owner_id);
+create policy "authenticated update own" on public.todo_items
+  for update using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+create policy "authenticated delete own" on public.todo_items
+  for delete using (auth.uid() = owner_id);
+
+create index if not exists leads_owner_id_idx on public.leads(owner_id);
+create index if not exists todo_items_owner_id_idx on public.todo_items(owner_id);
 
 -- ---------- realtime: push live changes to every connected browser ----------
 alter publication supabase_realtime add table public.leads;
 alter publication supabase_realtime add table public.todo_items;
 
 -- ---------- seed the 30 priority items (safe to run once; skipped if already seeded) ----------
-insert into public.todo_items (tier, position, title, note, done)
-select * from (values
+-- Requires the admin account (Sanjay) to already exist (Authentication -> Users -> Add user, email sanjay@sophiecreations.net).
+insert into public.todo_items (owner_id, tier, position, title, note, done)
+select (select id from auth.users where email = 'sanjay@sophiecreations.net'), tier, position, title, note, done
+from (values
   (1, 1, 'Invoice MBM for the display stands', 'Quotation already sent — stands are ready, just waiting on payment.', false),
   (1, 2, 'Invoice Chandra and collect her deposit', 'Necklace drawings are done — issue the invoice and take the deposit.', false),
   (1, 3, 'Collect Kamlesh''s strap and send his invoice', 'AP watch strap in 18K rose gold — collect and bill it.', false),

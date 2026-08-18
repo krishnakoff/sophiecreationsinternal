@@ -9,10 +9,18 @@ const TIERS = [
   { n: 6, heading: "6. Bigger, slower bets", note: "Worth doing, but the payoff is further out — don't let these crowd out the list above." }
 ];
 
+const OWNERS = [
+  { id: "87133383-89c3-468e-96b5-1cce2455edc7", name: "Krishna" },
+  { id: "cd66a924-67ec-4ecf-90a9-54edc57d3966", name: "Sanjay" }
+];
+function ownerName(id) { return (OWNERS.find(o => o.id === id) || {}).name || "Unknown"; }
+function isOwnData() { return viewingOwnerId === session.user.id; }
+
 let session = null;
 let leads = [];
 let todoItems = [];
 let realtimeReady = false;
+let viewingOwnerId = null;
 
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -37,6 +45,7 @@ document.getElementById("login-form").addEventListener("submit", async (e) => {
 });
 
 document.getElementById("signout").addEventListener("click", async () => {
+  viewingOwnerId = null;
   await sb.auth.signOut();
 });
 
@@ -46,10 +55,35 @@ function renderShell() {
   if (session) {
     loginScreen.hidden = true;
     app.hidden = false;
+    if (!viewingOwnerId) viewingOwnerId = session.user.id;
+    renderOwnerSwitch();
     loadAll();
   } else {
     loginScreen.hidden = false;
     app.hidden = true;
+  }
+}
+
+// ---------- owner switch ----------
+function renderOwnerSwitch() {
+  const wrap = document.getElementById("owner-switch");
+  wrap.innerHTML = OWNERS.map(o => `
+    <button type="button" data-owner-id="${o.id}" class="${o.id === viewingOwnerId ? "active" : ""}">${o.name}</button>
+  `).join("");
+  wrap.querySelectorAll("button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      viewingOwnerId = btn.dataset.ownerId;
+      renderOwnerSwitch();
+      loadAll();
+    });
+  });
+
+  const banner = document.getElementById("readonly-banner");
+  if (isOwnData()) {
+    banner.hidden = true;
+  } else {
+    document.getElementById("readonly-name").textContent = ownerName(viewingOwnerId);
+    banner.hidden = false;
   }
 }
 
@@ -81,13 +115,13 @@ function subscribeRealtime() {
 }
 
 async function loadLeads() {
-  const { data, error } = await sb.from("leads").select("*").order("created_at");
+  const { data, error } = await sb.from("leads").select("*").eq("owner_id", viewingOwnerId).order("created_at");
   if (!error) { leads = data || []; renderCrm(); }
   else console.error("loadLeads:", error.message);
 }
 
 async function loadTodos() {
-  const { data, error } = await sb.from("todo_items").select("*").order("tier").order("position");
+  const { data, error } = await sb.from("todo_items").select("*").eq("owner_id", viewingOwnerId).order("tier").order("position");
   if (!error) { todoItems = data || []; renderTodo(); }
   else console.error("loadTodos:", error.message);
 }
@@ -156,7 +190,7 @@ function renderCrm() {
   const activeTotal = leads.filter(l => l.status === "active").length;
 
   document.getElementById("crm-subtitle").textContent =
-    "Top-line summary as of " + today.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+    ownerName(viewingOwnerId) + "'s top-line summary as of " + today.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
 
   document.getElementById("cards").innerHTML = `
     <div class="card"><div class="num">${total}</div><div class="label">Total leads</div></div>
@@ -205,24 +239,34 @@ async function saveField(id, field, value) {
   if (error) console.error("saveField:", error.message);
 }
 
+async function addTodoItem(tierNum) {
+  const inTier = todoItems.filter(i => i.tier === tierNum);
+  const position = inTier.length ? Math.max(...inTier.map(i => i.position)) + 1 : 1;
+  const { error } = await sb.from("todo_items")
+    .insert({ owner_id: session.user.id, tier: tierNum, position, title: "New task", note: "" });
+  if (error) console.error("addTodoItem:", error.message);
+}
+
 function renderTodo() {
   const total = todoItems.length;
   const done = todoItems.filter(i => i.done).length;
   document.getElementById("fill").style.width = (total ? done / total * 100 : 0) + "%";
   document.getElementById("progLabel").textContent = done + " of " + total + " done";
 
+  const own = isOwnData();
+
   const html = TIERS.map(tier => {
     const items = todoItems.filter(i => i.tier === tier.n).sort((a, b) => a.position - b.position);
-    if (!items.length) return "";
+    if (!items.length && !own) return "";
     const rows = items.map(item => `
       <li class="item${item.done ? " done" : ""}" data-id="${item.id}">
         <span class="num">${item.position}</span>
-        <span class="checkbox${item.done ? " checked" : ""}" data-action="toggle" data-id="${item.id}" data-done="${item.done}">
+        <span class="checkbox${item.done ? " checked" : ""}${own ? "" : " disabled"}" data-action="toggle" data-id="${item.id}" data-done="${item.done}">
           <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><path d="M4 12l6 6L20 6"/></svg>
         </span>
         <span class="item-body">
-          <div class="item-title" contenteditable="true" data-id="${item.id}" data-field="title">${escapeHtml(item.title)}</div>
-          <div class="item-note" contenteditable="true" data-id="${item.id}" data-field="note">${escapeHtml(item.note)}</div>
+          <div class="item-title" contenteditable="${own}" data-id="${item.id}" data-field="title">${escapeHtml(item.title)}</div>
+          <div class="item-note" contenteditable="${own}" data-id="${item.id}" data-field="note">${escapeHtml(item.note)}</div>
         </span>
       </li>
     `).join("");
@@ -231,13 +275,14 @@ function renderTodo() {
         <div class="tier-heading">${escapeHtml(tier.heading)}</div>
         <div class="tier-note">${escapeHtml(tier.note)}</div>
         <ul class="items">${rows}</ul>
+        ${own ? `<button type="button" class="add-item-btn" data-tier="${tier.n}">+ Add task</button>` : ""}
       </div>
     `;
   }).join("");
 
   document.getElementById("todo-wrap").innerHTML = html;
 
-  document.querySelectorAll('.checkbox[data-action="toggle"]').forEach(cb => {
+  document.querySelectorAll('.checkbox[data-action="toggle"]:not(.disabled)').forEach(cb => {
     cb.addEventListener("click", (e) => {
       e.stopPropagation();
       const id = cb.dataset.id;
@@ -253,6 +298,10 @@ function renderTodo() {
     el.addEventListener("click", e => e.stopPropagation());
     el.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); el.blur(); } });
     el.addEventListener("blur", () => saveField(el.dataset.id, el.dataset.field, el.innerText.trim()));
+  });
+
+  document.querySelectorAll(".add-item-btn").forEach(btn => {
+    btn.addEventListener("click", () => addTodoItem(Number(btn.dataset.tier)));
   });
 }
 
