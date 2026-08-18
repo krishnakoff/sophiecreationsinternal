@@ -6,6 +6,19 @@ using the web UI, describe a lead or to-do change in chat and update the databas
 Because `todo_items` and `leads` are realtime-enabled, the change shows up on the live web app
 within a second or two — no redeploy needed.
 
+## This backend already exists — do not re-provision it
+
+There is exactly **one** Supabase project behind this app, already fully set up:
+`config.js` already has the real project URL and anon key (committed, live, pushed),
+`schema.sql` has already been run against it (both tables, RLS policies, and the seed data all
+exist), and login accounts for both Sanjay and Krishna already exist under
+*Authentication -> Users*. If you (or a fresh Claude session with no memory of this) are asked
+to "finish setting up Supabase," the actual remaining step is almost certainly just **getting
+the `.env` file below onto this machine** — not creating a new project, not re-running
+`schema.sql`, and not creating new accounts. Re-running `schema.sql` is safe (it's idempotent),
+but creating a second Supabase project would split the data in two and break the shared
+CRM/to-do model the whole app depends on.
+
 ## Local setup required
 
 This only works if a `.env` file exists in this directory (never commit it — it's gitignored)
@@ -17,9 +30,11 @@ SUPABASE_URL=https://grkqbudhjxxewrhpdjtz.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=...
 ```
 
-The service_role key bypasses row-level security entirely — treat it like a password. Never
-print it in full, never commit it, never put it in `config.js` (that file only ever gets the
-public anon key).
+These are the same three values used everywhere else this project runs — get them from
+whoever set up your machine (don't regenerate/rotate them without checking, since that would
+break the other person's local setup too). The service_role key bypasses row-level security
+entirely — treat it like a password. Never print it in full, never commit it, never put it in
+`config.js` (that file only ever gets the public anon key).
 
 ## Whose data am I writing?
 
