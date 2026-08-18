@@ -53,6 +53,16 @@ to Sanjay's list" while Krishna is chatting.
 Reads (`select`) can freely cross both owners — that's the point, so either of you can check in
 on the other's data. Writes must stay scoped to whoever is actually chatting.
 
+**`owner_id` vs `lead_owner`** on `leads` are different things. `owner_id` is the technical field
+above — whose tab a lead shows under, and (in principle, though all writes currently go through
+this service_role key anyway) who's allowed to edit it. `lead_owner` is a free-text business
+attribution field — literally whoever reached out to that company first, as a name. These
+usually match, but not always: a lead can be jointly worked (`lead_owner: "Krishna & Sanjay"`)
+while still needing a single `owner_id` for tab-filtering purposes — pick either person's id in
+that case, it's just a technical default, `lead_owner` is the fact that actually matters. When
+told "X is my lead" / "Y is Sanjay's", that's telling you `lead_owner` (and normally `owner_id`
+too, unless it's a joint one).
+
 ## Adding a CRM lead
 
 Table `public.leads`. A lead moves through `stage`:
@@ -100,6 +110,12 @@ quick chat update ("called Anup, no answer") without needing a full stage change
 **`call_response`** (free text, no fixed list) holds what a call actually turned up — e.g. "no
 connection", "receptionist said no", "manager said no", "good convo with manager, follow up", or
 anything else you're told. Don't constrain this to a preset enum; just record what you're given.
+When you're told about a call, stamp `called_at` = the date it happened (today, if not
+specified) — that's what the "Outbound calls this week" widget counts against, the same way
+`outbound_emails.sent_at` drives the email count.
+
+**`country`** (free text) is just the company's country — keep it to the country, not a full
+address (if you're given a city too, put that in `notes` instead).
 
 Insert a new prospect via the REST API with the service_role key:
 
@@ -110,8 +126,8 @@ curl -s -X POST "$SUPABASE_URL/rest/v1/leads" \
   -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY" \
   -H "Content-Type: application/json" -H "Prefer: return=representation" \
   -d '{
-    "owner_id": "<the chatting person'"'"'s id>",
-    "company": "...", "contact": "...", "email": "...", "product": "...",
+    "owner_id": "<the chatting person'"'"'s id>", "lead_owner": "Krishna",
+    "company": "...", "country": "...", "contact": "...", "email": "...", "product": "...",
     "stage": "prospect",
     "notes": "..."
   }'
@@ -155,8 +171,10 @@ curl -s -X POST "$SUPABASE_URL/rest/v1/outbound_emails" \
   -d '{"owner_id": "<id>", "recipient_email": "...", "lead_id": "<id or null>", "thread_id": "...", "sent_at": "ISO timestamp"}'
 ```
 
-The web app's "Outbound this week" widget and the CRM stage cards read straight off this table
-and `leads.stage` — no further wiring needed once these are logged correctly.
+The web app's "Outbound email this week" widget and the CRM stage cards read straight off this
+table and `leads.stage` — no further wiring needed once these are logged correctly. The
+"Outbound calls this week" widget next to it reads `leads.called_at` instead (see `called_at`
+above) since there's no call log table — just the latest call date per lead.
 
 ## Adding/updating a to-do item
 

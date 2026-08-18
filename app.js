@@ -203,14 +203,23 @@ function rankLead(lead, next, today) {
 
 async function loadOutboundStats() {
   const weekStart = startOfWeek(new Date());
-  const { data, error } = await sb.from("outbound_emails").select("owner_id").gte("sent_at", weekStart.toISOString());
-  if (error) { console.error("loadOutboundStats:", error.message); return; }
-  const counts = {};
-  OWNERS.forEach(o => counts[o.id] = 0);
-  (data || []).forEach(row => { if (row.owner_id in counts) counts[row.owner_id]++; });
+  const [emailRes, callRes] = await Promise.all([
+    sb.from("outbound_emails").select("owner_id").gte("sent_at", weekStart.toISOString()),
+    sb.from("leads").select("owner_id").gte("called_at", weekStart.toISOString().slice(0, 10))
+  ]);
+  if (emailRes.error) { console.error("loadOutboundStats (emails):", emailRes.error.message); return; }
+  if (callRes.error) { console.error("loadOutboundStats (calls):", callRes.error.message); return; }
+
+  const emailCounts = {}, callCounts = {};
+  OWNERS.forEach(o => { emailCounts[o.id] = 0; callCounts[o.id] = 0; });
+  (emailRes.data || []).forEach(row => { if (row.owner_id in emailCounts) emailCounts[row.owner_id]++; });
+  (callRes.data || []).forEach(row => { if (row.owner_id in callCounts) callCounts[row.owner_id]++; });
+
   document.getElementById("outbound-stats").innerHTML = `
-    <span class="outbound-label">Outbound this week</span>
-    ${OWNERS.map(o => `<span class="outbound-count"><strong>${counts[o.id]}</strong> ${escapeHtml(o.name)}</span>`).join("")}
+    <span class="outbound-label">Outbound email this week</span>
+    ${OWNERS.map(o => `<span class="outbound-count"><strong>${emailCounts[o.id]}</strong> ${escapeHtml(o.name)}</span>`).join("")}
+    <span class="outbound-label">Outbound calls this week</span>
+    ${OWNERS.map(o => `<span class="outbound-count"><strong>${callCounts[o.id]}</strong> ${escapeHtml(o.name)}</span>`).join("")}
   `;
 }
 
@@ -247,9 +256,11 @@ function renderCrm() {
   const rows = enriched.map(({ lead, next }) => `
     <tr class="${lead.priority ? "priority-row" : ""}">
       <td class="company">${lead.priority ? '<span class="star" title="Priority">&#9733;</span>' : ""}${escapeHtml(lead.company)}</td>
+      <td class="muted">${escapeHtml(lead.country)}</td>
       <td>${escapeHtml(lead.contact)}</td>
       <td class="muted">${escapeHtml(lead.email)}</td>
       <td>${escapeHtml(lead.product)}</td>
+      <td class="muted">${escapeHtml(lead.lead_owner)}</td>
       <td>${stagePill(lead)}</td>
       <td>${yn(lead.emailed)}</td>
       <td>${yn(lead.called)}</td>
@@ -261,7 +272,7 @@ function renderCrm() {
   wrap.innerHTML = `
     <div class="table-scroll">
     <table>
-      <thead><tr><th>Company</th><th>Contact</th><th>Email</th><th>Product</th><th>Stage</th><th>Emailed</th><th>Called</th><th>Call response</th><th>Next action</th><th>Notes</th></tr></thead>
+      <thead><tr><th>Company</th><th>Country</th><th>Contact</th><th>Email</th><th>Product</th><th>Lead Owner</th><th>Stage</th><th>Emailed</th><th>Called</th><th>Call response</th><th>Next action</th><th>Notes</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
     </div>
