@@ -1,4 +1,4 @@
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const TIERS = [
   { n: 1, heading: "1. Collect money already earned", note: "Confirmed orders, quotes already sent — these are just a call or WhatsApp away from cash in hand." },
@@ -20,10 +20,10 @@ function escapeHtml(s) {
 
 // ---------- auth ----------
 async function initAuth() {
-  const { data: { session: s } } = await supabase.auth.getSession();
+  const { data: { session: s } } = await sb.auth.getSession();
   session = s;
   renderShell();
-  supabase.auth.onAuthStateChange((_event, s2) => { session = s2; renderShell(); });
+  sb.auth.onAuthStateChange((_event, s2) => { session = s2; renderShell(); });
 }
 
 document.getElementById("login-form").addEventListener("submit", async (e) => {
@@ -32,12 +32,12 @@ document.getElementById("login-form").addEventListener("submit", async (e) => {
   const password = document.getElementById("login-password").value;
   const errBox = document.getElementById("login-error");
   errBox.hidden = true;
-  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  const { error } = await sb.auth.signInWithPassword({ email, password });
   if (error) { errBox.textContent = error.message; errBox.hidden = false; }
 });
 
 document.getElementById("signout").addEventListener("click", async () => {
-  await supabase.auth.signOut();
+  await sb.auth.signOut();
 });
 
 function renderShell() {
@@ -72,22 +72,22 @@ async function loadAll() {
 function subscribeRealtime() {
   if (realtimeReady) return;
   realtimeReady = true;
-  supabase.channel("public:leads")
+  sb.channel("public:leads")
     .on("postgres_changes", { event: "*", schema: "public", table: "leads" }, loadLeads)
     .subscribe();
-  supabase.channel("public:todo_items")
+  sb.channel("public:todo_items")
     .on("postgres_changes", { event: "*", schema: "public", table: "todo_items" }, loadTodos)
     .subscribe();
 }
 
 async function loadLeads() {
-  const { data, error } = await supabase.from("leads").select("*").order("created_at");
+  const { data, error } = await sb.from("leads").select("*").order("created_at");
   if (!error) { leads = data || []; renderCrm(); }
   else console.error("loadLeads:", error.message);
 }
 
 async function loadTodos() {
-  const { data, error } = await supabase.from("todo_items").select("*").order("tier").order("position");
+  const { data, error } = await sb.from("todo_items").select("*").order("tier").order("position");
   if (!error) { todoItems = data || []; renderTodo(); }
   else console.error("loadTodos:", error.message);
 }
@@ -196,12 +196,12 @@ function renderCrm() {
 
 // ---------- To-Do ----------
 async function toggleDone(id, done) {
-  const { error } = await supabase.from("todo_items").update({ done }).eq("id", id);
+  const { error } = await sb.from("todo_items").update({ done }).eq("id", id);
   if (error) console.error("toggleDone:", error.message);
 }
 
 async function saveField(id, field, value) {
-  const { error } = await supabase.from("todo_items").update({ [field]: value }).eq("id", id);
+  const { error } = await sb.from("todo_items").update({ [field]: value }).eq("id", id);
   if (error) console.error("saveField:", error.message);
 }
 
