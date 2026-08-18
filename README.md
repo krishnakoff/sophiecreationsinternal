@@ -33,6 +33,8 @@ It's plain HTML/CSS/JS — no build step, no framework. Edit a file, commit, pus
   Claude scanning Gmail (see `CLAUDE.md`); `conversation`/`sampling`/`client`/`dead` are manual
   calls. A `priority` flag pins a lead to the top of the table (with a star) regardless of
   stage — for the ones worth pushing hard on, until they close or explicitly decline.
+  `emailed`/`called` are simple yes/no flags, and `call_response` is free text (no fixed set of
+  values) for whatever the call actually turned up.
 - **`todo_items`** — one row per task, grouped by `tier` (1–6, matching the priority sections) and ordered by `position` within it.
 - **`outbound_emails`** — one row per first-time-recipient email detected in Gmail (sender, recipient, thread, timestamp). Feeds the weekly "who emailed how many new contacts" rollup and drives the stage auto-flips above.
 - All three tables have an **`owner_id`**. Everyone signed in can read every row (so you can check in on each other), but row-level security only lets you insert/update/delete rows you own. The topbar's name switcher picks whose data the page is showing; the other person's view is read-only.

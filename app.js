@@ -243,6 +243,7 @@ function renderCrm() {
     wrap.innerHTML = '<div class="empty-state">No leads yet.</div>';
     return;
   }
+  const yn = v => v ? '<span class="yn yes">&#10003;</span>' : '<span class="yn no">&mdash;</span>';
   const rows = enriched.map(({ lead, next }) => `
     <tr class="${lead.priority ? "priority-row" : ""}">
       <td class="company">${lead.priority ? '<span class="star" title="Priority">&#9733;</span>' : ""}${escapeHtml(lead.company)}</td>
@@ -250,6 +251,9 @@ function renderCrm() {
       <td class="muted">${escapeHtml(lead.email)}</td>
       <td>${escapeHtml(lead.product)}</td>
       <td>${stagePill(lead)}</td>
+      <td>${yn(lead.emailed)}</td>
+      <td>${yn(lead.called)}</td>
+      <td class="muted">${escapeHtml(lead.call_response) || '<span class="muted">&mdash;</span>'}</td>
       <td>${actionCell(lead, next, today)}</td>
       <td class="notes-cell">${escapeHtml(lead.stage === "dead" && lead.lost_reason ? lead.lost_reason : lead.notes)}</td>
     </tr>
@@ -257,7 +261,7 @@ function renderCrm() {
   wrap.innerHTML = `
     <div class="table-scroll">
     <table>
-      <thead><tr><th>Company</th><th>Contact</th><th>Email</th><th>Product</th><th>Stage</th><th>Next action</th><th>Notes</th></tr></thead>
+      <thead><tr><th>Company</th><th>Contact</th><th>Email</th><th>Product</th><th>Stage</th><th>Emailed</th><th>Called</th><th>Call response</th><th>Next action</th><th>Notes</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
     </div>

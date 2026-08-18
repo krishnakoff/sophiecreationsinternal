@@ -25,6 +25,9 @@ create table if not exists public.leads (
     check (stage in ('prospect', 'contacted', 'responded', 'conversation', 'sampling', 'client', 'dead')),
   lost_reason text,
   priority boolean not null default false,
+  emailed boolean not null default false,
+  called boolean not null default false,
+  call_response text,
   notes text default '',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()

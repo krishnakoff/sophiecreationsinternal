@@ -145,6 +145,10 @@ tbody tr:hover td{ background:var(--panel-2); }
 .priority-row td{ background:var(--accent-tint); }
 .priority-row:hover td{ background:var(--accent-tint); }
 .star{ color:var(--accent); margin-right:6px; font-size:12px; }
+
+.yn{ font-weight:700; }
+.yn.yes{ color:var(--emerald); }
+.yn.no{ color:var(--muted-2); }
 .muted{ color:var(--muted); }
 .notes-cell{ max-width:260px; color:var(--muted); font-size:12.5px; }
 

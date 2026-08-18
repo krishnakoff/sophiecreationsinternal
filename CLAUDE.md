@@ -81,6 +81,26 @@ closes (`client`) or explicitly declines (`dead` + a real reason) — don't clea
 follow-up is slow or they've gone quiet for a bit. Put the *why* in `notes` when you set it
 ("perfect match, push to close") so the reason is visible, not just the flag.
 
+**A common request pattern**: "favourite `<company/website>` and mention `<product detail>`" —
+possibly for a company that isn't in `leads` yet. Handle it as:
+- If no matching row exists (match by domain in `email`, or company name), create one at
+  `stage: "prospect"` (don't assume an email's gone out just because it was favourited).
+  If you don't have an actual contact email for them, leave `email` blank and say so back to
+  the person rather than guessing one — don't fabricate contact details.
+- Set `priority: true` and put the mentioned product detail in `product` (that's what "mention
+  X" means — it's the specific product/material angle for that lead, not a general note).
+- If the row already exists, update `product` with the new detail rather than overwriting a
+  good `notes` entry that's already there.
+
+**`emailed`** / **`called`** (booleans, default false) are simple yes/no flags for whether
+outreach on that channel has actually happened — kept in sync with stage where obvious (e.g.
+`emailed` flips true the moment stage leaves `prospect`), but also settable directly from a
+quick chat update ("called Anup, no answer") without needing a full stage change.
+
+**`call_response`** (free text, no fixed list) holds what a call actually turned up — e.g. "no
+connection", "receptionist said no", "manager said no", "good convo with manager, follow up", or
+anything else you're told. Don't constrain this to a preset enum; just record what you're given.
+
 Insert a new prospect via the REST API with the service_role key:
 
 ```bash
