@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Loupe</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Public+Sans:wght@400;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="login-screen" class="login-screen" hidden>
+  <form id="login-form" class="login-card">
+    <div class="wordmark">Lo<span>u</span>pe</div>
+    <p class="login-sub">Sign in with the account Sanjay set up for you.</p>
+    <label>Email<input type="email" id="login-email" required autocomplete="username"></label>
+    <label>Password<input type="password" id="login-password" required autocomplete="current-password"></label>
+    <div id="login-error" class="login-error" hidden></div>
+    <button type="submit">Sign in</button>
+  </form>
+</div>
+
+<div id="app" class="shell" hidden>
+  <div class="topbar">
+    <div class="wordmark">Lo<span>u</span>pe</div>
+    <div class="topbar-right">
+      <nav class="tabs">
+        <button type="button" data-target="crm" class="active">Outreach CRM</button>
+        <button type="button" data-target="todo">To&#8209;Do List</button>
+      </nav>
+      <button type="button" id="signout" class="signout-btn" title="Sign out">Sign out</button>
+    </div>
+  </div>
+
+  <section id="view-crm" class="view active">
+    <div class="crm-sub" id="crm-subtitle">Top-line summary</div>
+    <div class="cards" id="cards"></div>
+    <div id="crm-table-wrap"></div>
+  </section>
+
+  <section id="view-todo" class="view">
+    <div class="todo-sub">Ranked by return on time invested. Check a box to clear it &mdash; click any line to edit it.</div>
+    <div class="progress-wrap">
+      <div class="progress-bar-bg"><div class="progress-bar-fill" id="fill"></div></div>
+      <div class="progress-label" id="progLabel">0 done</div>
+    </div>
+    <div id="todo-wrap"></div>
+  </section>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

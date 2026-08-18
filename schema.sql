@@ -1,0 +1,108 @@
+-- Run this once in the Supabase SQL Editor (Project -> SQL Editor -> New query).
+-- Creates both tables, enables realtime, and locks writes to signed-in users only.
+
+create extension if not exists pgcrypto;
+
+-- ---------- leads (Outreach CRM) ----------
+create table if not exists public.leads (
+  id uuid primary key default gen_random_uuid(),
+  company text not null,
+  contact text default '',
+  email text default '',
+  product text default '',
+  added_date date not null default current_date,
+  steps_completed int not null default 0,
+  mode text not null default 'sequence' check (mode in ('sequence', 'snoozed')),
+  next_action_date date,
+  next_action_type text check (next_action_type in ('email', 'call')),
+  status text not null default 'active' check (status in ('active', 'dead', 'client')),
+  notes text default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- ---------- todo_items (Priority list) ----------
+create table if not exists public.todo_items (
+  id uuid primary key default gen_random_uuid(),
+  tier int not null,
+  position int not null,
+  title text not null,
+  note text default '',
+  done boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- ---------- keep updated_at fresh ----------
+create or replace function public.touch_updated_at()
+returns trigger language plpgsql as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists leads_touch_updated_at on public.leads;
+create trigger leads_touch_updated_at before update on public.leads
+  for each row execute function public.touch_updated_at();
+
+drop trigger if exists todo_items_touch_updated_at on public.todo_items;
+create trigger todo_items_touch_updated_at before update on public.todo_items
+  for each row execute function public.touch_updated_at();
+
+-- ---------- row level security: any signed-in team member can read/write everything ----------
+alter table public.leads enable row level security;
+alter table public.todo_items enable row level security;
+
+drop policy if exists "authenticated full access" on public.leads;
+create policy "authenticated full access" on public.leads
+  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+
+drop policy if exists "authenticated full access" on public.todo_items;
+create policy "authenticated full access" on public.todo_items
+  for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
+
+-- ---------- realtime: push live changes to every connected browser ----------
+alter publication supabase_realtime add table public.leads;
+alter publication supabase_realtime add table public.todo_items;
+
+-- ---------- seed the 30 priority items (safe to run once; skipped if already seeded) ----------
+insert into public.todo_items (tier, position, title, note, done)
+select * from (values
+  (1, 1, 'Invoice MBM for the display stands', 'Quotation already sent — stands are ready, just waiting on payment.', false),
+  (1, 2, 'Invoice Chandra and collect her deposit', 'Necklace drawings are done — issue the invoice and take the deposit.', false),
+  (1, 3, 'Collect Kamlesh''s strap and send his invoice', 'AP watch strap in 18K rose gold — collect and bill it.', false),
+  (1, 4, 'Collect deposit on the confirmed watch boxes', '16 styles confirmed — get the deposit locked in.', false),
+  (1, 5, 'Settle Hemal''s balance so delivery can release', 'Delivery''s on hold — resolve the balance conversation first.', false),
+  (1, 6, 'Get Ramesh Nandwani''s bangle out the door', 'Delivery date''s already passed — close this out.', false),
+
+  (2, 1, 'Confirm and close Anup''s watches', 'He''s chosen a few — get the confirmation.', false),
+  (2, 2, 'Send Anup a quote on the 1ct diamond necklace', 'It''s already on his books to get.', false),
+  (2, 3, 'Get Anmol''s diamond options to Renu', 'For her solitaire and ring band — a few nice pieces are ready to offer.', false),
+  (2, 4, 'Follow up on Meera Kam''s pink diamond ring', 'Source the stone and keep it moving.', false),
+  (2, 5, 'Contact Jeetu about jewellery', 'Warm, unqualified — a quick call to size it up.', false),
+  (2, 6, 'Follow up with Rajesh Bhojwani', 'He wants to buy — don''t let this go cold.', false),
+  (2, 7, 'Sell the TJC silver stock sitting in GC', 'Inventory sitting idle — convert it to cash.', false),
+  (2, 8, 'Chase Anmol for the Raveena Parvani update', 'Quick check-in to see where this stands.', false),
+
+  (3, 1, 'Fix a wake time and be at your desk by 9:30', '7:30am wake, 9:30am start — make it non-negotiable.', false),
+  (3, 2, 'Plan the day for 10 minutes each morning', 'In order of dollar impact — this list is the input.', false),
+  (3, 3, 'Set fixed phone-check windows', 'e.g. 12:30 and evening — instead of all day.', false),
+  (3, 4, 'Stop defaulting to WhatsApp for anything that needs a record', 'Invoices, confirmations, payment asks — keep those trackable.', false),
+
+  (4, 1, 'Check the watch box renderings on your laptop', 'Flagged as your action item from yesterday''s MBM meeting.', false),
+  (4, 2, 'Visit the jewelry box factory this week', 'Also from yesterday''s meeting — shipments are tracking for early September.', false),
+  (4, 3, 'Send Ranvir the new product images and styles', 'Keeps the line expanding beyond the current 16 styles.', false),
+  (4, 4, 'Push Liwan for final box pricing', 'Confirm pricing and the sample delivery date.', false),
+
+  (5, 1, 'Hire 1–2 commission-only salespeople', 'Outbound stops being bottlenecked on you alone.', false),
+  (5, 2, 'Scope 2–3 new products for your existing clients', 'Includes the new ring/collection line — use AI tools to speed up design.', false),
+  (5, 3, 'Set a daily outbound number and track it', 'e.g. 5 new contacts a day — make outreach a habit, not a mood.', false),
+  (5, 4, 'Get retail-store videography going', 'Cheap asset that compounds foot traffic over time.', false),
+
+  (6, 1, 'Progress the new bank loan', 'Deepu''s introduction — unlocks capital for inventory and growth.', false),
+  (6, 2, 'Scout pop-up store / storefront locations', 'Where to book, what it costs.', false),
+  (6, 3, 'Get a lawyer engaged', 'Formalize the commission structures and loan terms before they scale.', false),
+  (6, 4, 'Explore client segments beyond your current base', 'Most clients are Indian — test other nationalities and markets.', false)
+) as seed(tier, position, title, note, done)
+where not exists (select 1 from public.todo_items);

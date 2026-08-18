@@ -1,0 +1,3 @@
+# Never commit the service_role key or any secret — only Claude uses this, locally, for CRM updates.
+.env.local
+.env
