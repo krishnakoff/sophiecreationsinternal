@@ -2,6 +2,13 @@
 
 Shared outreach CRM + daily priority tracker. Plain HTML/CSS/JS frontend, [Supabase](https://supabase.com) as the backend (Postgres + auth + realtime), hosted free on GitHub Pages.
 
+**If you're Sanjay (or Krishna) opening a Claude session in this folder**: `CLAUDE.md` is the
+actual briefing — it auto-loads as instructions the moment Claude Code runs here, and covers the
+owner mapping, the lead stage pipeline, the priority/emailed/called/call_response fields, the
+"favourite X, mention Y" shorthand, and the Gmail outbound-scan procedure. This README is the
+plain-English overview for a human skim; `CLAUDE.md` is what Claude actually follows, so that's
+the one to check first if something isn't behaving as expected.
+
 ## Files
 
 - `index.html` / `style.css` / `app.js` — the app.
