@@ -15,10 +15,13 @@ const OWNERS = [
 ];
 function ownerName(id) { return (OWNERS.find(o => o.id === id) || {}).name || "Unknown"; }
 function isOwnData() { return viewingOwnerId === session.user.id; }
+const KRISHNA_ID = OWNERS.find(o => o.name === "Krishna").id;
 
 let session = null;
 let leads = [];
 let todoItems = [];
+let outlineNodes = [];
+let outlineCompletedCollapsed = true;
 let realtimeReady = false;
 let viewingOwnerId = null;
 
@@ -99,7 +102,8 @@ document.querySelectorAll("nav.tabs button").forEach(btn => {
 
 // ---------- data + realtime ----------
 async function loadAll() {
-  await Promise.all([loadLeads(), loadTodos(), loadOutboundStats()]);
+  const todoLoad = viewingOwnerId === KRISHNA_ID ? loadOutline() : loadTodos();
+  await Promise.all([loadLeads(), todoLoad, loadOutboundStats()]);
   subscribeRealtime();
 }
 
@@ -110,7 +114,10 @@ function subscribeRealtime() {
     .on("postgres_changes", { event: "*", schema: "public", table: "leads" }, loadLeads)
     .subscribe();
   sb.channel("public:todo_items")
-    .on("postgres_changes", { event: "*", schema: "public", table: "todo_items" }, loadTodos)
+    .on("postgres_changes", { event: "*", schema: "public", table: "todo_items" }, () => { if (viewingOwnerId !== KRISHNA_ID) loadTodos(); })
+    .subscribe();
+  sb.channel("public:todo_outline")
+    .on("postgres_changes", { event: "*", schema: "public", table: "todo_outline" }, () => { if (viewingOwnerId === KRISHNA_ID) loadOutline(); })
     .subscribe();
   sb.channel("public:outbound_emails")
     .on("postgres_changes", { event: "*", schema: "public", table: "outbound_emails" }, loadOutboundStats)
@@ -127,6 +134,12 @@ async function loadTodos() {
   const { data, error } = await sb.from("todo_items").select("*").eq("owner_id", viewingOwnerId).order("tier").order("position");
   if (!error) { todoItems = data || []; renderTodo(); }
   else console.error("loadTodos:", error.message);
+}
+
+async function loadOutline() {
+  const { data, error } = await sb.from("todo_outline").select("*").eq("owner_id", KRISHNA_ID).order("position");
+  if (!error) { outlineNodes = data || []; renderTodo(); }
+  else console.error("loadOutline:", error.message);
 }
 
 // ---------- CRM ----------
@@ -299,6 +312,11 @@ async function addTodoItem(tierNum) {
 }
 
 function renderTodo() {
+  if (viewingOwnerId === KRISHNA_ID) { renderOutline(); return; }
+  renderTierTodo();
+}
+
+function renderTierTodo() {
   const total = todoItems.length;
   const done = todoItems.filter(i => i.done).length;
   document.getElementById("fill").style.width = (total ? done / total * 100 : 0) + "%";
@@ -353,6 +371,155 @@ function renderTodo() {
 
   document.querySelectorAll(".add-item-btn").forEach(btn => {
     btn.addEventListener("click", () => addTodoItem(Number(btn.dataset.tier)));
+  });
+}
+
+// ---------- To-Do (Krishna's outline) ----------
+function parseBold(text) {
+  return escapeHtml(text).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+}
+
+function serializeOutlineEditable(el) {
+  let html = el.innerHTML.replace(/<(b|strong)>(.*?)<\/(b|strong)>/gi, "**$2**");
+  const div = document.createElement("div");
+  div.innerHTML = html;
+  return (div.textContent || "").replace(/ /g, " ").trim();
+}
+
+function buildOutlineTree(nodes) {
+  const byId = {};
+  nodes.forEach(n => { byId[n.id] = Object.assign({}, n, { children: [] }); });
+  const roots = [];
+  nodes.forEach(n => {
+    if (n.parent_id && byId[n.parent_id]) byId[n.parent_id].children.push(byId[n.id]);
+    else roots.push(byId[n.id]);
+  });
+  (function sortRec(list) { list.sort((a, b) => a.position - b.position); list.forEach(c => sortRec(c.children)); })(roots);
+  return roots;
+}
+
+function defaultChildStyle(node) {
+  if (node.children.length) return node.children[0].list_style;
+  if (node.list_style === "numbered" || node.list_style === "dashed") return node.list_style;
+  return "dashed";
+}
+
+async function toggleOutlineDone(id, done) {
+  const { error } = await sb.from("todo_outline").update({ done }).eq("id", id);
+  if (error) console.error("toggleOutlineDone:", error.message);
+}
+
+async function saveOutlineContent(id, el) {
+  const content = serializeOutlineEditable(el);
+  const { error } = await sb.from("todo_outline").update({ content }).eq("id", id);
+  if (error) console.error("saveOutlineContent:", error.message);
+}
+
+async function addOutlineNode(parentId, listStyle) {
+  const siblings = outlineNodes.filter(n => (n.parent_id || null) === (parentId || null));
+  const position = siblings.length ? Math.max(...siblings.map(n => n.position)) + 1 : 0;
+  const { error } = await sb.from("todo_outline")
+    .insert({ owner_id: KRISHNA_ID, parent_id: parentId, position, list_style: listStyle, content: "New item" });
+  if (error) console.error("addOutlineNode:", error.message);
+}
+
+async function addOutlineSection() {
+  await addOutlineNode(null, "none");
+}
+
+function renderOutlineList(nodes, own) {
+  if (!nodes.length) return "";
+  let numberIdx = 0;
+  const rows = nodes.map(n => {
+    let marker = "";
+    if (n.list_style === "numbered") { numberIdx++; marker = numberIdx + "."; }
+    else if (n.list_style === "dashed") { marker = "&ndash;"; }
+    const isHeading = n.list_style === "none";
+    const checkbox = !isHeading ? `
+      <span class="checkbox${n.done ? " checked" : ""}${own ? "" : " disabled"}" data-action="outline-toggle" data-id="${n.id}" data-done="${n.done}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><path d="M4 12l6 6L20 6"/></svg>
+      </span>` : "";
+    return `
+      <div class="outline-node ${isHeading ? "outline-heading" : "outline-item"}">
+        <div class="outline-row">
+          ${checkbox}
+          ${marker ? `<span class="outline-marker">${marker}</span>` : ""}
+          <div class="outline-content" contenteditable="${own}" data-id="${n.id}">${parseBold(n.content)}</div>
+        </div>
+        ${renderOutlineList(n.children, own)}
+        ${own ? `<button type="button" class="outline-add-btn" data-parent-id="${n.id}" data-style="${defaultChildStyle(n)}">+ add</button>` : ""}
+      </div>
+    `;
+  }).join("");
+  return `<div class="outline-list">${rows}</div>`;
+}
+
+function renderOutline() {
+  const actionable = outlineNodes.filter(n => n.list_style !== "none");
+  const total = actionable.length;
+  const done = actionable.filter(n => n.done).length;
+  document.getElementById("fill").style.width = (total ? done / total * 100 : 0) + "%";
+  document.getElementById("progLabel").textContent = done + " of " + total + " done";
+
+  const own = isOwnData();
+  const tree = buildOutlineTree(outlineNodes);
+  const completed = [];
+
+  (function extract(nodes) {
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      const n = nodes[i];
+      if (n.list_style !== "none" && n.done) {
+        completed.push(n);
+        nodes.splice(i, 1);
+      } else {
+        extract(n.children);
+      }
+    }
+  })(tree);
+  completed.sort((a, b) => a.position - b.position);
+
+  let html = renderOutlineList(tree, own);
+  if (own) html += `<button type="button" id="outline-add-section-btn" class="add-item-btn">+ Add section</button>`;
+
+  if (completed.length) {
+    html += `
+      <div class="outline-completed">
+        <button type="button" id="outline-completed-toggle" class="outline-completed-toggle">
+          ${outlineCompletedCollapsed ? "&#9656;" : "&#9662;"} Completed (${completed.length})
+        </button>
+        <div class="outline-completed-list"${outlineCompletedCollapsed ? " hidden" : ""}>
+          ${renderOutlineList(completed, own)}
+        </div>
+      </div>
+    `;
+  }
+
+  document.getElementById("todo-wrap").innerHTML = html;
+
+  document.querySelectorAll('#todo-wrap .checkbox[data-action="outline-toggle"]:not(.disabled)').forEach(cb => {
+    cb.addEventListener("click", e => {
+      e.stopPropagation();
+      toggleOutlineDone(cb.dataset.id, cb.dataset.done !== "true");
+    });
+  });
+
+  document.querySelectorAll('#todo-wrap .outline-content[contenteditable="true"]').forEach(el => {
+    el.addEventListener("click", e => e.stopPropagation());
+    el.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); el.blur(); } });
+    el.addEventListener("blur", () => saveOutlineContent(el.dataset.id, el));
+  });
+
+  document.querySelectorAll("#todo-wrap .outline-add-btn").forEach(btn => {
+    btn.addEventListener("click", () => addOutlineNode(btn.dataset.parentId, btn.dataset.style));
+  });
+
+  const addSectionBtn = document.getElementById("outline-add-section-btn");
+  if (addSectionBtn) addSectionBtn.addEventListener("click", addOutlineSection);
+
+  const completedToggle = document.getElementById("outline-completed-toggle");
+  if (completedToggle) completedToggle.addEventListener("click", () => {
+    outlineCompletedCollapsed = !outlineCompletedCollapsed;
+    renderOutline();
   });
 }
 

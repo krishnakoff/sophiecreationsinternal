@@ -178,7 +178,13 @@ above) since there's no call log table — just the latest call date per lead.
 
 ## Adding/updating a to-do item
 
-Table `public.todo_items`, grouped into 6 tiers matching the app's sections:
+**Krishna and Sanjay use two completely different to-do tables — check which one you need.**
+Krishna wanted his existing iCloud Notes outline kept exactly as-is rather than switched to
+Sanjay's tier format, so the web app renders a different table depending on whose tab is open.
+
+### Sanjay's to-do list — `public.todo_items`
+
+Grouped into 6 tiers matching the app's sections:
 
 1. Collect money already earned
 2. Close warm sales already in motion
@@ -205,6 +211,43 @@ curl -s -X POST "$SUPABASE_URL/rest/v1/todo_items" \
 ```
 
 Marking done / editing title-note is a PATCH to `todo_items?id=eq.<id>`.
+
+### Krishna's to-do list — `public.todo_outline`
+
+A tree, not a flat list. Every row has:
+- `parent_id` — the containing node, or `null` for a top-level section (e.g. "B2B Client",
+  "Operations"). A section like "MBM" or "KA" is itself a node nested one level under
+  "B2B Client", not a separate top-level entry.
+- `list_style` — `"none"` (a heading/paragraph — no marker, not checkable), `"numbered"`, or
+  `"dashed"`. This describes how the node renders *within its parent's list* — match whatever
+  style the surrounding siblings already use.
+- `position` — order among siblings sharing the same `parent_id`, 0-based.
+- `content` — the text. Wrap a span in `**double asterisks**` for bold (rendered as `<strong>`,
+  matches how the app's contenteditable bold round-trips). Only use bold where the source
+  actually had it (section titles like "Operations" are bold; plain client names like "MBM" are
+  not).
+- `done` — only meaningful when `list_style != "none"`. Checking an item in the app collapses it
+  into a "Completed" section at the bottom (view-only grouping, doesn't change `parent_id`).
+
+To add something Krishna tells you about ("add X to my to-do under Operations"): find the
+target section's `id`, then find the max `position` among its existing children:
+
+```bash
+curl -s "$SUPABASE_URL/rest/v1/todo_outline?parent_id=eq.<parent-id>&select=position&order=position.desc&limit=1" \
+  -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY"
+```
+
+then insert as a new child, matching the parent's existing list style:
+
+```bash
+curl -s -X POST "$SUPABASE_URL/rest/v1/todo_outline" \
+  -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"owner_id": "87133383-89c3-468e-96b5-1cce2455edc7", "parent_id": "<parent-id>", "position": <max+1>, "list_style": "dashed", "content": "..."}'
+```
+
+A brand new top-level section is the same insert with `"parent_id": null`. Editing content or
+toggling `done` is a PATCH to `todo_outline?id=eq.<id>` with just the changed field.
 
 ## Other rules
 

@@ -50,7 +50,7 @@ create table if not exists public.outbound_emails (
   created_at timestamptz not null default now()
 );
 
--- ---------- todo_items (Priority list) ----------
+-- ---------- todo_items (Priority list, Sanjay's tier-based view) ----------
 create table if not exists public.todo_items (
   id uuid primary key default gen_random_uuid(),
   owner_id uuid not null references auth.users(id) default auth.uid(),
@@ -58,6 +58,24 @@ create table if not exists public.todo_items (
   position int not null,
   title text not null,
   note text default '',
+  done boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- ---------- todo_outline (Krishna's nested outline view) ----------
+-- A tree: parent_id points to the containing node (null = top-level section). list_style is
+-- how THIS node renders inside its parent's list: 'none' (a heading/paragraph, no marker),
+-- 'numbered', or 'dashed'. content may contain **bold** spans, rendered as <strong>. Only
+-- list_style != 'none' nodes are checkable (done); checking one collapses it into a
+-- "Completed" section in the UI without changing its place in the tree.
+create table if not exists public.todo_outline (
+  id uuid primary key default gen_random_uuid(),
+  owner_id uuid not null references auth.users(id) default auth.uid(),
+  parent_id uuid references public.todo_outline(id) on delete cascade,
+  position int not null default 0,
+  list_style text not null default 'none' check (list_style in ('none', 'numbered', 'dashed')),
+  content text not null default '',
   done boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -84,6 +102,7 @@ create trigger todo_items_touch_updated_at before update on public.todo_items
 alter table public.leads enable row level security;
 alter table public.todo_items enable row level security;
 alter table public.outbound_emails enable row level security;
+alter table public.todo_outline enable row level security;
 
 drop policy if exists "authenticated full access" on public.leads;
 drop policy if exists "authenticated read all" on public.leads;
@@ -126,16 +145,32 @@ create policy "authenticated update own" on public.outbound_emails
 create policy "authenticated delete own" on public.outbound_emails
   for delete using (auth.uid() = owner_id);
 
+drop policy if exists "authenticated read all" on public.todo_outline;
+drop policy if exists "authenticated insert own" on public.todo_outline;
+drop policy if exists "authenticated update own" on public.todo_outline;
+drop policy if exists "authenticated delete own" on public.todo_outline;
+create policy "authenticated read all" on public.todo_outline
+  for select using (auth.role() = 'authenticated');
+create policy "authenticated insert own" on public.todo_outline
+  for insert with check (auth.uid() = owner_id);
+create policy "authenticated update own" on public.todo_outline
+  for update using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+create policy "authenticated delete own" on public.todo_outline
+  for delete using (auth.uid() = owner_id);
+
 create index if not exists leads_owner_id_idx on public.leads(owner_id);
 create index if not exists todo_items_owner_id_idx on public.todo_items(owner_id);
 create index if not exists outbound_emails_owner_id_idx on public.outbound_emails(owner_id);
 create index if not exists outbound_emails_sent_at_idx on public.outbound_emails(sent_at);
 create index if not exists outbound_emails_recipient_idx on public.outbound_emails(recipient_email);
+create index if not exists todo_outline_owner_id_idx on public.todo_outline(owner_id);
+create index if not exists todo_outline_parent_id_idx on public.todo_outline(parent_id);
 
 -- ---------- realtime: push live changes to every connected browser ----------
 alter publication supabase_realtime add table public.leads;
 alter publication supabase_realtime add table public.todo_items;
 alter publication supabase_realtime add table public.outbound_emails;
+alter publication supabase_realtime add table public.todo_outline;
 
 -- ---------- seed the 30 priority items (safe to run once; skipped if already seeded) ----------
 -- Requires the admin account (Sanjay) to already exist (Authentication -> Users -> Add user, email sanjay@sophiecreations.net).
