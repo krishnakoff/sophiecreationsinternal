@@ -136,7 +136,12 @@ function subscribeRealtime() {
     .on("postgres_changes", { event: "*", schema: "public", table: "todo_items" }, () => { if (viewingOwnerId !== KRISHNA_ID) loadTodos(); })
     .subscribe();
   sb.channel("public:todo_outline")
-    .on("postgres_changes", { event: "*", schema: "public", table: "todo_outline" }, () => { if (viewingOwnerId === KRISHNA_ID) loadOutline(); })
+    .on("postgres_changes", { event: "*", schema: "public", table: "todo_outline" }, () => {
+      if (viewingOwnerId !== KRISHNA_ID) return;
+      const active = document.activeElement;
+      if (active && active.classList && active.classList.contains("outline-content")) return; // don't yank focus mid-edit
+      loadOutline();
+    })
     .subscribe();
   sb.channel("public:outbound_emails")
     .on("postgres_changes", { event: "*", schema: "public", table: "outbound_emails" }, loadOutboundStats)
@@ -427,6 +432,70 @@ function serializeOutlineEditable(el) {
   return (div.textContent || "").replace(/ /g, " ").trim();
 }
 
+function placeCaretAtStart(el) {
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(true);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+function placeCaretAtEnd(el) {
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(false);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+function placeCaretAtOffset(el, offset) {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let node, remaining = offset;
+  while ((node = walker.nextNode())) {
+    if (remaining <= node.length) {
+      const range = document.createRange();
+      range.setStart(node, remaining);
+      range.collapse(true);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return;
+    }
+    remaining -= node.length;
+  }
+  placeCaretAtEnd(el);
+}
+
+function isCaretAtStart(el) {
+  const sel = window.getSelection();
+  if (!sel.rangeCount || !sel.isCollapsed) return false;
+  const range = sel.getRangeAt(0);
+  const testRange = document.createRange();
+  testRange.selectNodeContents(el);
+  testRange.setEnd(range.startContainer, range.startOffset);
+  return testRange.toString().length === 0;
+}
+
+function splitContentAtCaret(el) {
+  const sel = window.getSelection();
+  const range = sel.getRangeAt(0);
+  const beforeRange = document.createRange();
+  beforeRange.selectNodeContents(el);
+  beforeRange.setEnd(range.startContainer, range.startOffset);
+  const afterRange = document.createRange();
+  afterRange.selectNodeContents(el);
+  afterRange.setStart(range.startContainer, range.startOffset);
+
+  const beforeDiv = document.createElement("div");
+  beforeDiv.appendChild(beforeRange.cloneContents());
+  const afterDiv = document.createElement("div");
+  afterDiv.appendChild(afterRange.cloneContents());
+
+  return { before: serializeOutlineEditable(beforeDiv), after: serializeOutlineEditable(afterDiv) };
+}
+
 function buildOutlineTree(nodes) {
   const byId = {};
   nodes.forEach(n => { byId[n.id] = Object.assign({}, n, { children: [] }); });
@@ -445,27 +514,155 @@ function defaultChildStyle(node) {
   return "dashed";
 }
 
+// Every Supabase round-trip in this environment costs ~1s, so these mutations update local
+// state and re-render immediately (optimistic), firing the actual write in the background.
+// The realtime subscription still reconciles with the server afterward (harmless no-op re-render
+// when it's just confirming our own write, essential when the change came from elsewhere).
+//
+// New nodes get a temp- id immediately (so they're focusable/typeable at once) and get relabeled
+// to their real uuid in place once the insert resolves, with no re-render (so an in-progress edit
+// is never disturbed). Anything that needs to write to a node by id — including a second Enter
+// fired before the first node's insert has confirmed — awaits `resolveOutlineId` first so it
+// never sends a temp- id to the database.
+const pendingOutlineIds = {};
+async function resolveOutlineId(id) {
+  if (!id || !id.startsWith("temp-")) return id;
+  const pending = pendingOutlineIds[id];
+  return pending ? (await pending) || id : id;
+}
+
 async function toggleOutlineDone(id, done) {
-  const { error } = await sb.from("todo_outline").update({ done }).eq("id", id);
+  const node = outlineNodes.find(n => n.id === id);
+  if (node) { node.done = done; renderTodo(); }
+  const realId = await resolveOutlineId(id);
+  const { error } = await sb.from("todo_outline").update({ done }).eq("id", realId);
   if (error) console.error("toggleOutlineDone:", error.message);
 }
 
 async function saveOutlineContent(id, el) {
   const content = serializeOutlineEditable(el);
-  const { error } = await sb.from("todo_outline").update({ content }).eq("id", id);
+  const node = outlineNodes.find(n => n.id === id);
+  if (node) node.content = content;
+  const realId = await resolveOutlineId(id);
+  const { error } = await sb.from("todo_outline").update({ content }).eq("id", realId);
   if (error) console.error("saveOutlineContent:", error.message);
+}
+
+function selectAllInOutlineNode(id) {
+  const el = document.querySelector(`.outline-content[data-id="${id}"]`);
+  if (!el) return;
+  el.focus();
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+// Swaps a temp id for the real one everywhere it appears in the DOM, without touching the
+// DOM nodes themselves — preserves focus/cursor/selection if the user is still mid-edit there.
+function relabelOutlineNodeId(oldId, newId) {
+  document.querySelectorAll(`[data-id="${oldId}"]`).forEach(el => { el.dataset.id = newId; });
+  document.querySelectorAll(`[data-parent-id="${oldId}"]`).forEach(el => { el.dataset.parentId = newId; });
+}
+
+function insertOptimisticOutlineNode(parentId, position, listStyle, content) {
+  const tempId = "temp-" + Math.random().toString(36).slice(2);
+  const optimisticNode = { id: tempId, owner_id: KRISHNA_ID, parent_id: parentId, position, list_style: listStyle, content, done: false };
+  outlineNodes.push(optimisticNode);
+
+  const promise = sb.from("todo_outline")
+    .insert({ owner_id: KRISHNA_ID, parent_id: parentId, position, list_style: listStyle, content })
+    .select().single()
+    .then(({ data, error }) => {
+      delete pendingOutlineIds[tempId];
+      if (error) {
+        console.error("insertOptimisticOutlineNode:", error.message);
+        outlineNodes = outlineNodes.filter(n => n.id !== tempId);
+        renderTodo();
+        return null;
+      }
+      Object.assign(optimisticNode, data);
+      relabelOutlineNodeId(tempId, data.id);
+      return data.id;
+    });
+  pendingOutlineIds[tempId] = promise;
+
+  return { tempId, optimisticNode };
 }
 
 async function addOutlineNode(parentId, listStyle) {
   const siblings = outlineNodes.filter(n => (n.parent_id || null) === (parentId || null));
   const position = siblings.length ? Math.max(...siblings.map(n => n.position)) + 1 : 0;
-  const { error } = await sb.from("todo_outline")
-    .insert({ owner_id: KRISHNA_ID, parent_id: parentId, position, list_style: listStyle, content: "New item" });
-  if (error) console.error("addOutlineNode:", error.message);
+  const { tempId } = insertOptimisticOutlineNode(parentId, position, listStyle, "New item");
+  renderTodo();
+  selectAllInOutlineNode(tempId);
 }
 
 async function addOutlineSection() {
   await addOutlineNode(null, "none");
+}
+
+function focusOutlineNode(id, offset) {
+  const el = document.querySelector(`.outline-content[data-id="${id}"]`);
+  if (!el) return;
+  el.focus();
+  if (typeof offset === "number") placeCaretAtOffset(el, offset);
+  else placeCaretAtStart(el);
+}
+
+async function outlineEnterKey(el, id) {
+  const node = outlineNodes.find(n => n.id === id);
+  if (!node) return;
+  const { before, after } = splitContentAtCaret(el);
+
+  const siblings = outlineNodes
+    .filter(n => (n.parent_id || null) === (node.parent_id || null))
+    .sort((a, b) => a.position - b.position);
+  const idx = siblings.findIndex(n => n.id === id);
+  const nextSibling = siblings[idx + 1];
+  const newPosition = nextSibling ? (node.position + nextSibling.position) / 2 : node.position + 1;
+
+  node.content = before;
+  const { tempId } = insertOptimisticOutlineNode(node.parent_id, newPosition, node.list_style, after);
+  renderTodo();
+  focusOutlineNode(tempId, 0);
+
+  const realId = await resolveOutlineId(id);
+  const { error } = await sb.from("todo_outline").update({ content: before }).eq("id", realId);
+  if (error) console.error("outlineEnterKey:", error.message);
+}
+
+async function outlineBackspaceKey(e, el, id) {
+  if (!isCaretAtStart(el)) return;
+  const node = outlineNodes.find(n => n.id === id);
+  if (!node) return;
+  if (outlineNodes.some(n => n.parent_id === id)) return; // has children — too risky to auto-merge
+
+  const siblings = outlineNodes
+    .filter(n => (n.parent_id || null) === (node.parent_id || null))
+    .sort((a, b) => a.position - b.position);
+  const idx = siblings.findIndex(n => n.id === id);
+  if (idx <= 0) return; // no previous sibling to merge into
+
+  const prev = siblings[idx - 1];
+  if (outlineNodes.some(n => n.parent_id === prev.id)) return; // previous has children — skip
+
+  e.preventDefault();
+  const currentContent = serializeOutlineEditable(el);
+  const caretPos = prev.content.length;
+  const mergedContent = (prev.content + currentContent).trim();
+
+  prev.content = mergedContent;
+  outlineNodes = outlineNodes.filter(n => n.id !== id);
+  renderTodo();
+  focusOutlineNode(prev.id, caretPos);
+
+  const [realPrevId, realId] = await Promise.all([resolveOutlineId(prev.id), resolveOutlineId(id)]);
+  await Promise.all([
+    sb.from("todo_outline").update({ content: mergedContent }).eq("id", realPrevId),
+    sb.from("todo_outline").delete().eq("id", realId)
+  ]);
 }
 
 function renderOutlineList(nodes, own) {
@@ -546,7 +743,10 @@ function renderOutline() {
 
   document.querySelectorAll('#todo-wrap .outline-content[contenteditable="true"]').forEach(el => {
     el.addEventListener("click", e => e.stopPropagation());
-    el.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); el.blur(); } });
+    el.addEventListener("keydown", e => {
+      if (e.key === "Enter") { e.preventDefault(); outlineEnterKey(el, el.dataset.id); }
+      else if (e.key === "Backspace") { outlineBackspaceKey(e, el, el.dataset.id); }
+    });
     el.addEventListener("blur", () => saveOutlineContent(el.dataset.id, el));
   });
 

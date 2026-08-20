@@ -68,12 +68,15 @@ create table if not exists public.todo_items (
 -- how THIS node renders inside its parent's list: 'none' (a heading/paragraph, no marker),
 -- 'numbered', or 'dashed'. content may contain **bold** spans, rendered as <strong>. Only
 -- list_style != 'none' nodes are checkable (done); checking one collapses it into a
--- "Completed" section in the UI without changing its place in the tree.
+-- "Completed" section in the UI without changing its place in the tree. position is numeric
+-- (not int) so the app can insert a new line between two existing siblings (e.g. 5.5 between
+-- 5 and 6) without renumbering every row after it — that's what makes pressing Enter mid-list
+-- fast instead of cascading position updates across the whole section.
 create table if not exists public.todo_outline (
   id uuid primary key default gen_random_uuid(),
   owner_id uuid not null references auth.users(id) default auth.uid(),
   parent_id uuid references public.todo_outline(id) on delete cascade,
-  position int not null default 0,
+  position numeric not null default 0,
   list_style text not null default 'none' check (list_style in ('none', 'numbered', 'dashed')),
   content text not null default '',
   done boolean not null default false,
