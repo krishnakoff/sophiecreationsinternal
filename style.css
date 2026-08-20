@@ -129,7 +129,7 @@ nav.tabs button:hover:not(.active){ color:var(--ink); }
 .outbound-count{ font-family:var(--font-mono); }
 .outbound-count strong{ font-size:14px; color:var(--ink); }
 
-.cards{ display:grid; grid-template-columns:repeat(7,1fr); gap:10px; margin-bottom:26px; }
+.cards{ display:grid; grid-template-columns:repeat(8,1fr); gap:10px; margin-bottom:26px; }
 .card{ background:var(--panel); border:1px solid var(--hairline); border-radius:10px; padding:13px 14px; cursor:pointer; transition:border-color .1s, box-shadow .1s; }
 .card:hover{ border-color:var(--muted-2); }
 .card.card-active{ border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
@@ -167,6 +167,7 @@ tbody tr:hover td{ background:var(--panel-2); }
 .pill-conversation{ background:var(--accent-tint); color:var(--accent); }
 .pill-sampling{ background:var(--garnet-tint); color:var(--garnet); }
 .pill-client{ background:var(--emerald-tint); color:var(--emerald); }
+.pill-revive{ background:var(--amber-tint); color:var(--amber); }
 .pill-dead{ background:var(--panel-2); color:var(--muted); }
 .pill-flag{ background:var(--garnet-tint); color:var(--garnet); }
 

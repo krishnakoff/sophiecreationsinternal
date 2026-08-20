@@ -175,6 +175,7 @@ const STAGES = [
   { id: "conversation", label: "In conversation" },
   { id: "sampling", label: "Sampling" },
   { id: "client", label: "Client" },
+  { id: "revive", label: "Revive" },
   { id: "dead", label: "Dead" }
 ];
 let crmStageFilter = null;
@@ -193,7 +194,7 @@ function computeNextAction(lead, today) {
     if (!lead.contacted_at) return null;
     return { date: addDays(parseDate(lead.contacted_at), SEQUENCE_OFFSETS[step]), type: SEQUENCE_TYPES[step] };
   }
-  if (["conversation", "sampling"].includes(lead.stage) && lead.next_action_date) {
+  if (["conversation", "sampling", "revive"].includes(lead.stage) && lead.next_action_date) {
     return { date: parseDate(lead.next_action_date), type: lead.next_action_type || "email" };
   }
   return null;
@@ -230,9 +231,10 @@ function rankLead(lead, next, today) {
     }
   } else if (lead.stage === "conversation") stageRank = 4;
   else if (lead.stage === "sampling") stageRank = 5;
-  else if (lead.stage === "prospect") stageRank = 6;
-  else if (lead.stage === "client") stageRank = 7;
-  else stageRank = 8; // dead
+  else if (lead.stage === "revive") stageRank = 6; // gone quiet, but still worth pushing
+  else if (lead.stage === "prospect") stageRank = 7;
+  else if (lead.stage === "client") stageRank = 8;
+  else stageRank = 9; // dead
 
   return [priorityBit, stageRank, dateRank];
 }
@@ -279,6 +281,7 @@ function renderCrm() {
     { stage: "conversation", num: counts.conversation, label: "In conversation", cls: "c-accent" },
     { stage: "sampling", num: counts.sampling, label: "Sampling", cls: "c-garnet" },
     { stage: "client", num: counts.client, label: "Clients", cls: "c-emerald" },
+    { stage: "revive", num: counts.revive, label: "Revive", cls: "c-amber" },
     { stage: "dead", num: counts.dead, label: "Dead", cls: "" }
   ];
   document.getElementById("cards").innerHTML = cardSpecs.map(c => `

@@ -7,9 +7,12 @@ create extension if not exists pgcrypto;
 -- stage lifecycle: prospect -> contacted -> conversation -> sampling -> client (dead is
 -- reachable from any stage). There's no separate "responded" stage - a reply jumps straight
 -- from contacted to conversation, since once someone replies you're already talking to them.
--- contacted_at drives the day 1/4/7/10 auto follow-up cadence; next_action_date/next_action_type
--- are the manual "what's next" fields once a lead is past that auto-cadence stage (conversation/
--- sampling). responded_at just records when the first reply landed, independent of stage.
+-- revive is reachable from client - a signed client who's gone quiet but isn't dead, worth
+-- actively pushing for another/repeat order; from revive a lead can go back to client (they
+-- ordered again) or to dead (they won't reorder). contacted_at drives the day 1/4/7/10 auto
+-- follow-up cadence; next_action_date/next_action_type are the manual "what's next" fields once
+-- a lead is past that auto-cadence stage (conversation/sampling/revive). responded_at just
+-- records when the first reply landed, independent of stage.
 create table if not exists public.leads (
   id uuid primary key default gen_random_uuid(),
   owner_id uuid references auth.users(id) default auth.uid(),
@@ -26,7 +29,7 @@ create table if not exists public.leads (
   next_action_date date,
   next_action_type text check (next_action_type in ('email', 'call')),
   stage text not null default 'prospect'
-    check (stage in ('prospect', 'contacted', 'conversation', 'sampling', 'client', 'dead')),
+    check (stage in ('prospect', 'contacted', 'conversation', 'sampling', 'client', 'revive', 'dead')),
   lost_reason text,
   priority boolean not null default false,
   emailed boolean not null default false,

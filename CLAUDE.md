@@ -111,6 +111,12 @@ a plain timestamp of when that first reply came in, independent of stage.
   Advance these when told to ("sample's out the door" -> `sampling`; "they signed" -> `client`).
   `next_action_date` + `next_action_type` (`"email"` or `"call"`) hold the manual next step once
   a lead is past `contacted`.
+- **`revive`** — a signed `client` who's gone quiet (no repeat order in a while) but hasn't
+  declined — set this when told to keep actively pushing them for another order ("they haven't
+  reordered in months, let's push" -> `revive`). From `revive` a lead goes back to `client` once
+  they order again, or to `dead` if you're told they genuinely won't reorder. Same
+  `next_action_date`/`next_action_type` manual-next-step fields apply here as in
+  `conversation`/`sampling`.
 - **`dead`** — set `lost_reason` if you're told why (no budget, went silent, chose a competitor,
   not a fit).
 
