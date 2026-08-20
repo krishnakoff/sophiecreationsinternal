@@ -32,13 +32,16 @@ It's plain HTML/CSS/JS — no build step, no framework. Edit a file, commit, pus
 ## Data model
 
 - **`leads`** — one row per company, moving through a `stage`: `prospect` -> `contacted` ->
-  `responded` -> `conversation` -> `sampling` -> `client` (`dead`, with an optional
-  `lost_reason`, is reachable from any stage). `contacted_at` + `steps_completed` (0–4) drive
-  the day 1 / 4 / 7 / 10 auto follow-up cadence shown in the "Next action" column while a lead
-  is `contacted`; past that, `next_action_date`/`next_action_type` are the manual "what's next"
-  fields. `prospect` -> `contacted` and `contacted` -> `responded` are flipped automatically by
-  Claude scanning Gmail (see `CLAUDE.md`); `conversation`/`sampling`/`client`/`dead` are manual
-  calls. A `priority` flag pins a lead to the top of the table (with a star) regardless of
+  `conversation` -> `sampling` -> `client` (`dead`, with an optional `lost_reason`, is reachable
+  from any stage). There's no separate "responded" stage — a reply jumps straight from
+  `contacted` to `conversation`. `contacted_at` + `steps_completed` (0–4) drive the day 1 / 4 /
+  7 / 10 auto follow-up cadence shown in the "Next action" column while a lead is `contacted`;
+  past that, `next_action_date`/`next_action_type` are the manual "what's next" fields.
+  `prospect` -> `contacted` and `contacted` -> `conversation` are flipped automatically by
+  Claude scanning Gmail (see `CLAUDE.md`); `sampling`/`client`/`dead` are manual calls. Every
+  stage card in the CRM is clickable — it filters the table to just that stage, scoped to
+  whichever tab (Krishna's or Sanjay's) is currently open. A `priority` flag pins a lead to the
+  top of the table (with a star) regardless of
   stage — for the ones worth pushing hard on, until they close or explicitly decline.
   `emailed`/`called` are simple yes/no flags, and `call_response` is free text (no fixed set of
   values) for whatever the call actually turned up. `country` is the company's country;

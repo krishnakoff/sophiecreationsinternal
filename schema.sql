@@ -4,10 +4,12 @@
 create extension if not exists pgcrypto;
 
 -- ---------- leads (Outreach CRM) ----------
--- stage lifecycle: prospect -> contacted -> responded -> conversation -> sampling -> client
--- (dead is reachable from any stage). contacted_at drives the day 1/4/7/10 auto follow-up
--- cadence; next_action_date/next_action_type are the manual "what's next" fields once a lead
--- is past the auto-cadence stage (responded/conversation/sampling).
+-- stage lifecycle: prospect -> contacted -> conversation -> sampling -> client (dead is
+-- reachable from any stage). There's no separate "responded" stage - a reply jumps straight
+-- from contacted to conversation, since once someone replies you're already talking to them.
+-- contacted_at drives the day 1/4/7/10 auto follow-up cadence; next_action_date/next_action_type
+-- are the manual "what's next" fields once a lead is past that auto-cadence stage (conversation/
+-- sampling). responded_at just records when the first reply landed, independent of stage.
 create table if not exists public.leads (
   id uuid primary key default gen_random_uuid(),
   owner_id uuid references auth.users(id) default auth.uid(),
@@ -24,7 +26,7 @@ create table if not exists public.leads (
   next_action_date date,
   next_action_type text check (next_action_type in ('email', 'call')),
   stage text not null default 'prospect'
-    check (stage in ('prospect', 'contacted', 'responded', 'conversation', 'sampling', 'client', 'dead')),
+    check (stage in ('prospect', 'contacted', 'conversation', 'sampling', 'client', 'dead')),
   lost_reason text,
   priority boolean not null default false,
   emailed boolean not null default false,
@@ -39,7 +41,7 @@ create table if not exists public.leads (
 -- ---------- outbound_emails (per-person log of first-time-recipient emails) ----------
 -- Populated by Claude scanning Gmail on request (see CLAUDE.md) — not written by the web app.
 -- Drives the weekly "who reached out to how many people" rollup and flips a lead from
--- prospect -> contacted (first outbound) and contacted -> responded (a reply lands in the thread).
+-- prospect -> contacted (first outbound) and contacted -> conversation (a reply lands in the thread).
 create table if not exists public.outbound_emails (
   id uuid primary key default gen_random_uuid(),
   owner_id uuid not null references auth.users(id) default auth.uid(),

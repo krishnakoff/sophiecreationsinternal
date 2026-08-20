@@ -6,6 +6,21 @@ using the web UI, describe a lead or to-do change in chat and update the databas
 Because `todo_items` and `leads` are realtime-enabled, the change shows up on the live web app
 within a second or two — no redeploy needed.
 
+## Roles: Krishna is super admin, Sanjay is a full user
+
+Krishna is the super admin. Sanjay gets every feature the platform has — the same CRM stage
+model, priority flags, emailed/called tracking, clickable stat-card filtering, outbound scanning,
+everything — applied to his own data, exactly like Krishna's. Nothing in this app is gated by
+which of them is asking; the feature set is identical, only the data is scoped per owner (see
+"Whose data am I writing?" below).
+
+The one thing that's reserved for Krishna: changes to the platform itself — `index.html`,
+`app.js`, `style.css`, `schema.sql`, RLS policies, or anything else that changes how the app
+behaves for everyone. If you're in a session with Sanjay and he asks for a new feature, a schema
+change, or a fix to how something works (as opposed to "add this lead" / "update my to-do" /
+"check my outbound," which are just his own data), say so and hold off until Krishna directs it
+— don't make the change on Sanjay's say-so alone, even if it seems like a small tweak.
+
 ## This backend already exists — do not re-provision it
 
 There is exactly **one** Supabase project behind this app, already fully set up:
@@ -67,8 +82,13 @@ too, unless it's a joint one).
 
 Table `public.leads`. A lead moves through `stage`:
 
-`prospect` -> `contacted` -> `responded` -> `conversation` -> `sampling` -> `client`
+`prospect` -> `contacted` -> `conversation` -> `sampling` -> `client`
 (`dead` is reachable from any stage, with an optional `lost_reason`).
+
+There's no separate `responded` stage — the moment a reply lands, a lead goes straight from
+`contacted` to `conversation` (once they've replied, you're already talking to them, so pausing
+on an intermediate "responded" stage didn't add anything). `responded_at` still gets stamped as
+a plain timestamp of when that first reply came in, independent of stage.
 
 - **`prospect`** — identified as worth reaching out to (by research, Apollo, Google, a
   referral), but no email has gone out yet. This is the default for anything added from a
@@ -77,10 +97,11 @@ Table `public.leads`. A lead moves through `stage`:
   a chat request like "add this lead" — it gets set automatically by the outbound-email scan
   below, which stamps `contacted_at` and starts the day 1/4/7/10 cadence
   (`steps_completed`, 0–4, tracks how far through it they are).
-- **`responded` / `conversation` / `sampling` / `client`** — manual judgment calls. Advance
-  these when told to ("they replied and we're talking now" -> `conversation`; "sample's out the
-  door" -> `sampling`; "they signed" -> `client`). `next_action_date` + `next_action_type`
-  (`"email"` or `"call"`) hold the manual next step once a lead is past `contacted`.
+- **`conversation` / `sampling` / `client`** — manual judgment calls, except the initial
+  `contacted` -> `conversation` flip on a reply (see the Gmail scan below, which is mechanical).
+  Advance these when told to ("sample's out the door" -> `sampling`; "they signed" -> `client`).
+  `next_action_date` + `next_action_type` (`"email"` or `"call"`) hold the manual next step once
+  a lead is past `contacted`.
 - **`dead`** — set `lost_reason` if you're told why (no budget, went silent, chose a competitor,
   not a fit).
 
@@ -151,18 +172,36 @@ that, use the latest `sent_at` already in `outbound_emails` for that owner):
    attempt.
 2. **Check if the recipient is new.** Search Sent for `to:<address>` — if this message is the
    only (or earliest) one to that address, it's a first-time outbound attempt.
-3. **Log it**: insert into `outbound_emails` — `owner_id` (the mailbox owner), `recipient_email`,
+3. **Check it actually delivered.** Search for a `mailer-daemon@googlemail.com` bounce
+   ("Delivery Status Notification (Failure)") tied to that address before counting it. A bounced
+   send never reached anyone — don't log it as an outbound attempt, and if a lead was already
+   created from it, revert it to `prospect` (clear `contacted_at`, set `emailed` back to false)
+   and note the bad address in `notes` rather than leaving a false `contacted` on record.
+4. **Log it**: insert into `outbound_emails` — `owner_id` (the mailbox owner), `recipient_email`,
    `thread_id`, `sent_at`. Match `lead_id` if the recipient email already exists on a `leads`
    row for that owner.
-4. **Flip stage if there's a matching lead**: `prospect` -> `contacted` (stamp `contacted_at` =
+5. **Flip stage if there's a matching lead**: `prospect` -> `contacted` (stamp `contacted_at` =
    the send date, `steps_completed` = 1). If there's no matching lead at all, don't invent one —
    flag it back to the person ("emailed X at newcompany.com, no lead on file — add it?") rather
    than silently creating a CRM entry for an address you don't have context on.
-5. **Check for replies** on threads already in `contacted` stage: if anything after the first
-   outbound message is from someone other than the account owner, flip that lead
-   `contacted` -> `responded` and stamp `responded_at`. This is mechanical (reply exists or it
-   doesn't) — don't read the reply's content to judge quality or sentiment, that's a manual call
-   for `conversation`/`sampling`/`client`.
+6. **Check for replies** on threads already in `contacted` stage: if anything after the first
+   outbound message is from someone other than the account owner, flip that lead straight to
+   `conversation` (there's no intermediate `responded` stage) and stamp `responded_at`. This
+   stage flip is mechanical (reply exists or it doesn't) — don't read the reply's content to
+   judge quality or sentiment. If the thread shows real back-and-forth (multiple replies, new
+   people looped in, a catalog/samples request), reflect that in `notes` — e.g. who else got
+   added to the thread — since that context is exactly what makes `conversation` the right call
+   rather than just noise.
+
+### Scanning more broadly for lead developments (not just this week's outbound)
+
+When asked to check for "any updates" over some period (not specifically "outbound this week"),
+search across all mail, not just Sent — `after:YYYY/MM/DD` with no `in:` restriction — since a
+development can show up as a reply landing in the inbox, not just a new send. Walk every thread
+touching a company already in `leads`, and apply the same rules as above: new first-time sends
+get logged and flip `prospect` -> `contacted`; a reply on a `contacted` lead flips it to
+`conversation` with the new contacts/context noted. Ignore internal/operational mail (invoices,
+vendor support threads, meeting-notes bots) unless it's clearly about a specific lead's deal.
 
 ```bash
 curl -s -X POST "$SUPABASE_URL/rest/v1/outbound_emails" \

@@ -129,8 +129,10 @@ nav.tabs button:hover:not(.active){ color:var(--ink); }
 .outbound-count{ font-family:var(--font-mono); }
 .outbound-count strong{ font-size:14px; color:var(--ink); }
 
-.cards{ display:grid; grid-template-columns:repeat(8,1fr); gap:10px; margin-bottom:26px; }
-.card{ background:var(--panel); border:1px solid var(--hairline); border-radius:10px; padding:13px 14px; }
+.cards{ display:grid; grid-template-columns:repeat(7,1fr); gap:10px; margin-bottom:26px; }
+.card{ background:var(--panel); border:1px solid var(--hairline); border-radius:10px; padding:13px 14px; cursor:pointer; transition:border-color .1s, box-shadow .1s; }
+.card:hover{ border-color:var(--muted-2); }
+.card.card-active{ border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
 .card .num{ font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:22px; font-weight:600; line-height:1.1; }
 .card .label{ font-size:11.5px; color:var(--muted); margin-top:3px; }
 .card.c-garnet .num{ color:var(--garnet); }
@@ -162,7 +164,6 @@ tbody tr:hover td{ background:var(--panel-2); }
 .pill{ display:inline-block; padding:2px 9px; border-radius:999px; font-size:11px; font-weight:600; white-space:nowrap; }
 .pill-prospect{ background:transparent; border:1px solid var(--muted-2); color:var(--muted); }
 .pill-contacted{ background:var(--sapphire-tint); color:var(--sapphire); }
-.pill-responded{ background:var(--amber-tint); color:var(--amber); }
 .pill-conversation{ background:var(--accent-tint); color:var(--accent); }
 .pill-sampling{ background:var(--garnet-tint); color:var(--garnet); }
 .pill-client{ background:var(--emerald-tint); color:var(--emerald); }

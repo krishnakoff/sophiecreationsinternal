@@ -172,12 +172,12 @@ const SEQUENCE_TYPES = ["email", "call", "email", "call"];
 const STAGES = [
   { id: "prospect", label: "Prospect" },
   { id: "contacted", label: "Contacted" },
-  { id: "responded", label: "Responded" },
   { id: "conversation", label: "In conversation" },
   { id: "sampling", label: "Sampling" },
   { id: "client", label: "Client" },
   { id: "dead", label: "Dead" }
 ];
+let crmStageFilter = null;
 
 function parseDate(s) { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); }
 function addDays(date, n) { const d = new Date(date); d.setDate(d.getDate() + n); return d; }
@@ -193,7 +193,7 @@ function computeNextAction(lead, today) {
     if (!lead.contacted_at) return null;
     return { date: addDays(parseDate(lead.contacted_at), SEQUENCE_OFFSETS[step]), type: SEQUENCE_TYPES[step] };
   }
-  if (["responded", "conversation", "sampling"].includes(lead.stage) && lead.next_action_date) {
+  if (["conversation", "sampling"].includes(lead.stage) && lead.next_action_date) {
     return { date: parseDate(lead.next_action_date), type: lead.next_action_type || "email" };
   }
   return null;
@@ -228,12 +228,11 @@ function rankLead(lead, next, today) {
     } else {
       stageRank = 3; // sequence exhausted, no reply yet — needs a manual follow-up
     }
-  } else if (lead.stage === "responded") stageRank = 4;
-  else if (lead.stage === "conversation") stageRank = 5;
-  else if (lead.stage === "sampling") stageRank = 6;
-  else if (lead.stage === "prospect") stageRank = 7;
-  else if (lead.stage === "client") stageRank = 8;
-  else stageRank = 9; // dead
+  } else if (lead.stage === "conversation") stageRank = 4;
+  else if (lead.stage === "sampling") stageRank = 5;
+  else if (lead.stage === "prospect") stageRank = 6;
+  else if (lead.stage === "client") stageRank = 7;
+  else stageRank = 8; // dead
 
   return [priorityBit, stageRank, dateRank];
 }
@@ -273,24 +272,41 @@ function renderCrm() {
   document.getElementById("crm-subtitle").textContent =
     ownerName(viewingOwnerId) + "'s top-line summary as of " + today.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
 
-  document.getElementById("cards").innerHTML = `
-    <div class="card"><div class="num">${total}</div><div class="label">Total leads</div></div>
-    <div class="card"><div class="num">${counts.prospect}</div><div class="label">Prospects</div></div>
-    <div class="card c-sapphire"><div class="num">${counts.contacted}</div><div class="label">Contacted</div></div>
-    <div class="card c-amber"><div class="num">${counts.responded}</div><div class="label">Responded</div></div>
-    <div class="card c-accent"><div class="num">${counts.conversation}</div><div class="label">In conversation</div></div>
-    <div class="card c-garnet"><div class="num">${counts.sampling}</div><div class="label">Sampling</div></div>
-    <div class="card c-emerald"><div class="num">${counts.client}</div><div class="label">Clients</div></div>
-    <div class="card"><div class="num">${counts.dead}</div><div class="label">Dead</div></div>
-  `;
+  const cardSpecs = [
+    { stage: null, num: total, label: "Total leads", cls: "" },
+    { stage: "prospect", num: counts.prospect, label: "Prospects", cls: "" },
+    { stage: "contacted", num: counts.contacted, label: "Contacted", cls: "c-sapphire" },
+    { stage: "conversation", num: counts.conversation, label: "In conversation", cls: "c-accent" },
+    { stage: "sampling", num: counts.sampling, label: "Sampling", cls: "c-garnet" },
+    { stage: "client", num: counts.client, label: "Clients", cls: "c-emerald" },
+    { stage: "dead", num: counts.dead, label: "Dead", cls: "" }
+  ];
+  document.getElementById("cards").innerHTML = cardSpecs.map(c => `
+    <div class="card ${c.cls} ${crmStageFilter === c.stage ? "card-active" : ""}" data-stage="${c.stage ?? ""}">
+      <div class="num">${c.num}</div><div class="label">${c.label}</div>
+    </div>
+  `).join("");
+  document.querySelectorAll("#cards .card").forEach(card => {
+    card.addEventListener("click", () => {
+      const stage = card.dataset.stage || null;
+      crmStageFilter = crmStageFilter === stage ? null : stage;
+      renderCrm();
+    });
+  });
 
   const wrap = document.getElementById("crm-table-wrap");
   if (total === 0) {
     wrap.innerHTML = '<div class="empty-state">No leads yet.</div>';
     return;
   }
+  const visible = crmStageFilter ? enriched.filter(e => e.lead.stage === crmStageFilter) : enriched;
+  if (!visible.length) {
+    wrap.innerHTML = `<div class="empty-state">No leads in this stage. <button type="button" id="clear-stage-filter" class="add-item-btn">Clear filter</button></div>`;
+    document.getElementById("clear-stage-filter").addEventListener("click", () => { crmStageFilter = null; renderCrm(); });
+    return;
+  }
   const yn = v => v ? '<span class="yn yes">&#10003;</span>' : '<span class="yn no">&mdash;</span>';
-  const rows = enriched.map(({ lead, next }) => `
+  const rows = visible.map(({ lead, next }) => `
     <tr class="${lead.priority ? "priority-row" : ""}">
       <td class="company">${lead.priority ? '<span class="star" title="Priority">&#9733;</span>' : ""}${escapeHtml(lead.company)}</td>
       <td class="muted">${escapeHtml(lead.country)}</td>
