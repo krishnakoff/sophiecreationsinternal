@@ -80,6 +80,15 @@ too, unless it's a joint one).
 
 ## Adding a CRM lead
 
+**This CRM is strictly for B2B retail/wholesale clients — companies buying jewelry to resell or
+manufacture with.** Never add a B2C individual customer here, even if they show up in Gmail with
+a sales invoice, a costing email, or an active order (e.g. Chloe's SI-numbered invoice emails to
+individuals like Jeetu Ramchandani, Jasmine Mehta, Jyoti Bhagchandani — these are personal
+customers, not retail-client leads). B2C customer tracking lives in Krishna's to-do outline
+instead (see the B2C Orders section there), not in `leads`. If a Gmail scan turns up a personal
+sale, at most flag it back ("saw an invoice for X, might be worth checking off your to-do") —
+don't create or touch a `leads` row for it.
+
 Table `public.leads`. A lead moves through `stage`:
 
 `prospect` -> `contacted` -> `conversation` -> `sampling` -> `client`
@@ -214,6 +223,30 @@ The web app's "Outbound email this week" widget and the CRM stage cards read str
 table and `leads.stage` — no further wiring needed once these are logged correctly. The
 "Outbound calls this week" widget next to it reads `leads.called_at` instead (see `called_at`
 above) since there's no call log table — just the latest call date per lead.
+
+## Checking Apollo for double-email risk (read-only audit)
+
+When asked to check whether manually-emailed contacts might also get an automated Apollo email
+(so nobody gets double-emailed), or whether anyone already `conversation`/`sampling`/`client`
+is still sitting in a cold sequence: **only use read tools** (`apollo_contacts_search`,
+`apollo_emailer_campaigns_search`) — never pause, remove, or approve anything in Apollo unless
+separately asked to.
+
+**Don't trust email wording to tell manual from Apollo-sent.** Apollo can draft fully
+personalized, non-templated copy per contact (it researches each account and writes custom
+hooks) — a "manual-looking" email in Gmail can still be an Apollo `auto_email` step that just
+fired. The only reliable signal is `apollo_contacts_search` on that email/company: check
+`contact_campaign_statuses` for an `active` status, which `emailer_campaign_id`, and
+`current_step_position` — then look up that sequence's own `active` flag and its
+`emailer_steps` to see what step is next and whether it's an `auto_email` (fires on its own) or
+a `call`/`manual_email` step (needs a human to act). A contact idling at a `call` step with an
+`auto_email` step after it will still auto-send once that call is marked done — flag that, it's
+a live risk even though nothing's firing today.
+
+Cross-check both directions: every contact manually emailed in the lookback window, and every
+CRM lead already at `conversation`/`sampling`/`client` (sequences should only ever touch
+`prospect`/early `contacted` leads). Report exactly what you find — company, sequence name,
+current step, what's next — and let the person decide whether to remove/pause it themselves.
 
 ## Adding/updating a to-do item
 
