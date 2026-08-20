@@ -515,6 +515,83 @@ function splitContentAtCaret(el) {
   return { before: serializeOutlineEditable(beforeDiv), after: serializeOutlineEditable(afterDiv) };
 }
 
+// Cross-line Up/Down navigation: each line is its own contenteditable, so the browser's
+// default arrow-key handling can't cross between them on its own. These check whether the
+// caret is on the visual first/last line of the CURRENT field (not just "is it multi-line") so
+// arrowing within a wrapped paragraph still works normally, and only jump fields at the edge.
+function getCaretClientRect(el) {
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return null;
+  const range = sel.getRangeAt(0).cloneRange();
+  range.collapse(true);
+  const rects = range.getClientRects();
+  return rects.length ? rects[0] : null;
+}
+
+function caretOnLastLine(el) {
+  const rect = getCaretClientRect(el);
+  if (!rect) return true;
+  const elRect = el.getBoundingClientRect();
+  const lineHeight = parseFloat(getComputedStyle(el).lineHeight) || rect.height || 18;
+  return elRect.bottom - rect.bottom < lineHeight * 0.6;
+}
+
+function caretOnFirstLine(el) {
+  const rect = getCaretClientRect(el);
+  if (!rect) return true;
+  const elRect = el.getBoundingClientRect();
+  const lineHeight = parseFloat(getComputedStyle(el).lineHeight) || rect.height || 18;
+  return rect.top - elRect.top < lineHeight * 0.6;
+}
+
+function placeCaretNear(el, x, y) {
+  let range = null;
+  if (document.caretRangeFromPoint) {
+    range = document.caretRangeFromPoint(x, y);
+  } else if (document.caretPositionFromPoint) {
+    const pos = document.caretPositionFromPoint(x, y);
+    if (pos) { range = document.createRange(); range.setStart(pos.offsetNode, pos.offset); }
+  }
+  if (range && el.contains(range.startContainer)) {
+    range.collapse(true);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } else {
+    placeCaretAtStart(el);
+  }
+}
+
+function navigableOutlineFields() {
+  return Array.from(document.querySelectorAll('#todo-wrap .outline-content[contenteditable="true"]'));
+}
+
+function outlineArrowKey(e, el) {
+  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+  const rect = getCaretClientRect(el);
+  const x = rect ? rect.left : el.getBoundingClientRect().left + 4;
+  const fields = navigableOutlineFields();
+  const idx = fields.indexOf(el);
+
+  if (e.key === "ArrowDown" && caretOnLastLine(el)) {
+    const next = fields[idx + 1];
+    if (next) {
+      e.preventDefault();
+      const targetRect = next.getBoundingClientRect();
+      next.focus();
+      placeCaretNear(next, x, targetRect.top + 2);
+    }
+  } else if (e.key === "ArrowUp" && caretOnFirstLine(el)) {
+    const prev = fields[idx - 1];
+    if (prev) {
+      e.preventDefault();
+      const targetRect = prev.getBoundingClientRect();
+      prev.focus();
+      placeCaretNear(prev, x, targetRect.bottom - 2);
+    }
+  }
+}
+
 function buildOutlineTree(nodes) {
   const byId = {};
   nodes.forEach(n => { byId[n.id] = Object.assign({}, n, { children: [] }); });
@@ -765,6 +842,7 @@ function renderOutline() {
     el.addEventListener("keydown", e => {
       if (e.key === "Enter") { e.preventDefault(); outlineEnterKey(el, el.dataset.id); }
       else if (e.key === "Backspace") { outlineBackspaceKey(e, el, el.dataset.id); }
+      else if (e.key === "ArrowDown" || e.key === "ArrowUp") { outlineArrowKey(e, el); }
     });
     el.addEventListener("blur", () => saveOutlineContent(el.dataset.id, el));
   });

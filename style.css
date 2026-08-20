@@ -229,7 +229,7 @@ ul.items{ list-style:none; margin:0; padding:0; border-top:1px solid var(--hairl
 .outline-marker{ font-family:var(--font-mono); font-size:12.5px; color:var(--muted-2); min-width:16px; flex-shrink:0; padding-top:1px; }
 .outline-content{ flex:1; min-width:0; cursor:text; outline:none; }
 .outline-content[contenteditable="false"]{ cursor:default; }
-.outline-content:focus{ outline:1px dashed var(--accent); outline-offset:3px; border-radius:2px; }
+.outline-content:focus{ outline:none; }
 .outline-add-btn{
   appearance:none; border:none; background:none; color:var(--muted-2); font-family:inherit;
   font-size:11.5px; padding:2px 4px 2px 26px; cursor:pointer; opacity:0; transition:opacity .1s;
