@@ -256,41 +256,13 @@ current step, what's next — and let the person decide whether to remove/pause 
 
 ## Adding/updating a to-do item
 
-**Krishna and Sanjay use two completely different to-do tables — check which one you need.**
-Krishna wanted his existing iCloud Notes outline kept exactly as-is rather than switched to
-Sanjay's tier format, so the web app renders a different table depending on whose tab is open.
-
-### Sanjay's to-do list — `public.todo_items`
-
-Grouped into 6 tiers matching the app's sections:
-
-1. Collect money already earned
-2. Close warm sales already in motion
-3. Two-minute habits that protect everything above
-4. Keep the MBM pipeline moving
-5. Build leverage that multiplies future sales
-6. Bigger, slower bets
-
-Pick the tier that matches what's being added. `position` orders items within a tier for that
-owner — query the current max and add 1:
-
-```bash
-curl -s "$SUPABASE_URL/rest/v1/todo_items?owner_id=eq.<id>&tier=eq.<n>&select=position&order=position.desc&limit=1" \
-  -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY"
-```
-
-then insert:
-
-```bash
-curl -s -X POST "$SUPABASE_URL/rest/v1/todo_items" \
-  -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"owner_id": "<id>", "tier": <n>, "position": <max+1>, "title": "...", "note": "...", "done": false}'
-```
-
-Marking done / editing title-note is a PATCH to `todo_items?id=eq.<id>`.
-
-### Krishna's to-do list — `public.todo_outline`
+**Everyone's to-do list lives in the same table, `public.todo_outline`, in the same nested
+format.** Krishna originally wanted his existing iCloud Notes outline kept as-is rather than
+switched to a tier structure, so that became the shared format for both of them — the web app
+renders identically for whichever account's tab is open, scoped only by `owner_id`. (There's a
+legacy `public.todo_items` table — a flat, tier-grouped list Sanjay used before his to-do list
+was migrated into this same outline format. It's no longer read or written by the app; don't use
+it for new work.)
 
 A tree, not a flat list. Every row has:
 - `parent_id` — the containing node, or `null` for a top-level section (e.g. "B2B Client",
@@ -307,8 +279,9 @@ A tree, not a flat list. Every row has:
 - `done` — only meaningful when `list_style != "none"`. Checking an item in the app collapses it
   into a "Completed" section at the bottom (view-only grouping, doesn't change `parent_id`).
 
-To add something Krishna tells you about ("add X to my to-do under Operations"): find the
-target section's `id`, then find the max `position` among its existing children:
+To add something you're told about ("add X to my to-do under Operations"): find the target
+section's `id` (scoped to the chatting person's `owner_id`), then find the max `position` among
+its existing children:
 
 ```bash
 curl -s "$SUPABASE_URL/rest/v1/todo_outline?parent_id=eq.<parent-id>&select=position&order=position.desc&limit=1" \
@@ -321,7 +294,7 @@ then insert as a new child, matching the parent's existing list style:
 curl -s -X POST "$SUPABASE_URL/rest/v1/todo_outline" \
   -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"owner_id": "87133383-89c3-468e-96b5-1cce2455edc7", "parent_id": "<parent-id>", "position": <max+1>, "list_style": "dashed", "content": "..."}'
+  -d '{"owner_id": "<the chatting person'"'"'s id>", "parent_id": "<parent-id>", "position": <max+1>, "list_style": "dashed", "content": "..."}'
 ```
 
 A brand new top-level section is the same insert with `"parent_id": null`. Editing content or

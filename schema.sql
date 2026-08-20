@@ -55,7 +55,9 @@ create table if not exists public.outbound_emails (
   created_at timestamptz not null default now()
 );
 
--- ---------- todo_items (Priority list, Sanjay's tier-based view) ----------
+-- ---------- todo_items (legacy tier-based to-do list, unused by the app) ----------
+-- Superseded by todo_outline below, which every account now uses. Kept (not dropped) for
+-- historical/rollback value only — the app no longer reads or writes this table.
 create table if not exists public.todo_items (
   id uuid primary key default gen_random_uuid(),
   owner_id uuid not null references auth.users(id) default auth.uid(),
@@ -68,7 +70,7 @@ create table if not exists public.todo_items (
   updated_at timestamptz not null default now()
 );
 
--- ---------- todo_outline (Krishna's nested outline view) ----------
+-- ---------- todo_outline (nested outline to-do list, shared by every account) ----------
 -- A tree: parent_id points to the containing node (null = top-level section). list_style is
 -- how THIS node renders inside its parent's list: 'none' (a heading/paragraph, no marker),
 -- 'numbered', or 'dashed'. content may contain **bold** spans, rendered as <strong>. Only

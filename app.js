@@ -15,26 +15,15 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { storage: customAuthStorage, persistSession: true, autoRefreshToken: true }
 });
 
-const TIERS = [
-  { n: 1, heading: "1. Collect money already earned", note: "Confirmed orders, quotes already sent — these are just a call or WhatsApp away from cash in hand." },
-  { n: 2, heading: "2. Close warm sales already in motion", note: "Real buyers, live conversations — these just need a nudge to convert." },
-  { n: 3, heading: "3. Two-minute habits that protect everything above", note: "Zero cost, compounds daily — these determine how much of the list above actually gets done." },
-  { n: 4, heading: "4. Keep the MBM pipeline moving", note: "Real production and shipping already underway — this protects revenue already in motion." },
-  { n: 5, heading: "5. Build leverage that multiplies future sales", note: "More effort, but these stop revenue depending entirely on your own hours." },
-  { n: 6, heading: "6. Bigger, slower bets", note: "Worth doing, but the payoff is further out — don't let these crowd out the list above." }
-];
-
 const OWNERS = [
   { id: "87133383-89c3-468e-96b5-1cce2455edc7", name: "Krishna" },
   { id: "cd66a924-67ec-4ecf-90a9-54edc57d3966", name: "Sanjay" }
 ];
 function ownerName(id) { return (OWNERS.find(o => o.id === id) || {}).name || "Unknown"; }
 function isOwnData() { return viewingOwnerId === session.user.id; }
-const KRISHNA_ID = OWNERS.find(o => o.name === "Krishna").id;
 
 let session = null;
 let leads = [];
-let todoItems = [];
 let outlineNodes = [];
 let outlineCompletedCollapsed = true;
 let realtimeReady = false;
@@ -121,8 +110,7 @@ document.querySelectorAll("nav.tabs button").forEach(btn => {
 
 // ---------- data + realtime ----------
 async function loadAll() {
-  const todoLoad = viewingOwnerId === KRISHNA_ID ? loadOutline() : loadTodos();
-  await Promise.all([loadLeads(), todoLoad, loadOutboundStats()]);
+  await Promise.all([loadLeads(), loadOutline(), loadOutboundStats()]);
   subscribeRealtime();
 }
 
@@ -132,12 +120,8 @@ function subscribeRealtime() {
   sb.channel("public:leads")
     .on("postgres_changes", { event: "*", schema: "public", table: "leads" }, loadLeads)
     .subscribe();
-  sb.channel("public:todo_items")
-    .on("postgres_changes", { event: "*", schema: "public", table: "todo_items" }, () => { if (viewingOwnerId !== KRISHNA_ID) loadTodos(); })
-    .subscribe();
   sb.channel("public:todo_outline")
     .on("postgres_changes", { event: "*", schema: "public", table: "todo_outline" }, () => {
-      if (viewingOwnerId !== KRISHNA_ID) return;
       const active = document.activeElement;
       if (active && active.classList && active.classList.contains("outline-content")) return; // don't yank focus mid-edit
       loadOutline();
@@ -154,14 +138,8 @@ async function loadLeads() {
   else console.error("loadLeads:", error.message);
 }
 
-async function loadTodos() {
-  const { data, error } = await sb.from("todo_items").select("*").eq("owner_id", viewingOwnerId).order("tier").order("position");
-  if (!error) { todoItems = data || []; renderTodo(); }
-  else console.error("loadTodos:", error.message);
-}
-
 async function loadOutline() {
-  const { data, error } = await sb.from("todo_outline").select("*").eq("owner_id", KRISHNA_ID).order("position");
+  const { data, error } = await sb.from("todo_outline").select("*").eq("owner_id", viewingOwnerId).order("position");
   if (!error) { outlineNodes = data || []; renderTodo(); }
   else console.error("loadOutline:", error.message);
 }
@@ -335,111 +313,11 @@ function renderCrm() {
   `;
 }
 
-// ---------- To-Do ----------
-async function toggleDone(id, done) {
-  const { error } = await sb.from("todo_items").update({ done }).eq("id", id);
-  if (error) console.error("toggleDone:", error.message);
-}
-
-async function saveField(id, field, value) {
-  const { error } = await sb.from("todo_items").update({ [field]: value }).eq("id", id);
-  if (error) console.error("saveField:", error.message);
-}
-
-async function addTodoItem(tierNum) {
-  const inTier = todoItems.filter(i => i.tier === tierNum);
-  const position = inTier.length ? Math.max(...inTier.map(i => i.position)) + 1 : 1;
-  const { error } = await sb.from("todo_items")
-    .insert({ owner_id: session.user.id, tier: tierNum, position, title: "New task", note: "" });
-  if (error) console.error("addTodoItem:", error.message);
-}
-
+// ---------- To-Do (shared outline format for every account) ----------
 function renderTodo() {
-  if (viewingOwnerId === KRISHNA_ID) { renderOutline(); return; }
-  renderTierTodo();
+  renderOutline();
 }
 
-let tierCompletedCollapsed = true;
-
-function renderTierItemRow(item, own) {
-  return `
-    <li class="item" data-id="${item.id}">
-      <span class="num">${item.position}</span>
-      <span class="checkbox${item.done ? " checked" : ""}${own ? "" : " disabled"}" data-action="toggle" data-id="${item.id}" data-done="${item.done}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><path d="M4 12l6 6L20 6"/></svg>
-      </span>
-      <span class="item-body">
-        <div class="item-title" contenteditable="${own}" data-id="${item.id}" data-field="title">${escapeHtml(item.title)}</div>
-        <div class="item-note" contenteditable="${own}" data-id="${item.id}" data-field="note">${escapeHtml(item.note)}</div>
-      </span>
-    </li>
-  `;
-}
-
-function renderTierTodo() {
-  const total = todoItems.length;
-  const done = todoItems.filter(i => i.done).length;
-  document.getElementById("fill").style.width = (total ? done / total * 100 : 0) + "%";
-  document.getElementById("progLabel").textContent = done + " of " + total + " done";
-
-  const own = isOwnData();
-  const activeItems = todoItems.filter(i => !i.done);
-  const completedItems = todoItems.filter(i => i.done).sort((a, b) => a.tier - b.tier || a.position - b.position);
-
-  let html = TIERS.map(tier => {
-    const items = activeItems.filter(i => i.tier === tier.n).sort((a, b) => a.position - b.position);
-    if (!items.length && !own) return "";
-    const rows = items.map(item => renderTierItemRow(item, own)).join("");
-    return `
-      <div class="tier">
-        <div class="tier-heading">${escapeHtml(tier.heading)}</div>
-        <div class="tier-note">${escapeHtml(tier.note)}</div>
-        <ul class="items">${rows}</ul>
-        ${own ? `<button type="button" class="add-item-btn" data-tier="${tier.n}">+ Add task</button>` : ""}
-      </div>
-    `;
-  }).join("");
-
-  if (completedItems.length) {
-    html += `
-      <div class="completed-section">
-        <button type="button" id="tier-completed-toggle" class="completed-toggle">
-          ${tierCompletedCollapsed ? "&#9656;" : "&#9662;"} Completed (${completedItems.length})
-        </button>
-        <ul class="items completed-list"${tierCompletedCollapsed ? " hidden" : ""}>
-          ${completedItems.map(item => renderTierItemRow(item, own)).join("")}
-        </ul>
-      </div>
-    `;
-  }
-
-  document.getElementById("todo-wrap").innerHTML = html;
-
-  document.querySelectorAll('.checkbox[data-action="toggle"]:not(.disabled)').forEach(cb => {
-    cb.addEventListener("click", (e) => {
-      e.stopPropagation();
-      toggleDone(cb.dataset.id, cb.dataset.done !== "true");
-    });
-  });
-
-  document.querySelectorAll(".item-title, .item-note").forEach(el => {
-    el.addEventListener("click", e => e.stopPropagation());
-    el.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); el.blur(); } });
-    el.addEventListener("blur", () => saveField(el.dataset.id, el.dataset.field, el.innerText.trim()));
-  });
-
-  document.querySelectorAll(".add-item-btn").forEach(btn => {
-    btn.addEventListener("click", () => addTodoItem(Number(btn.dataset.tier)));
-  });
-
-  const completedToggle = document.getElementById("tier-completed-toggle");
-  if (completedToggle) completedToggle.addEventListener("click", () => {
-    tierCompletedCollapsed = !tierCompletedCollapsed;
-    renderTierTodo();
-  });
-}
-
-// ---------- To-Do (Krishna's outline) ----------
 function parseBold(text) {
   return escapeHtml(text).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
 }
@@ -664,11 +542,11 @@ function relabelOutlineNodeId(oldId, newId) {
 
 function insertOptimisticOutlineNode(parentId, position, listStyle, content) {
   const tempId = "temp-" + Math.random().toString(36).slice(2);
-  const optimisticNode = { id: tempId, owner_id: KRISHNA_ID, parent_id: parentId, position, list_style: listStyle, content, done: false };
+  const optimisticNode = { id: tempId, owner_id: session.user.id, parent_id: parentId, position, list_style: listStyle, content, done: false };
   outlineNodes.push(optimisticNode);
 
   const promise = sb.from("todo_outline")
-    .insert({ owner_id: KRISHNA_ID, parent_id: parentId, position, list_style: listStyle, content })
+    .insert({ owner_id: session.user.id, parent_id: parentId, position, list_style: listStyle, content })
     .select().single()
     .then(({ data, error }) => {
       delete pendingOutlineIds[tempId];

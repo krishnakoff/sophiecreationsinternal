@@ -49,8 +49,15 @@ It's plain HTML/CSS/JS — no build step, no framework. Edit a file, commit, pus
   values) for whatever the call actually turned up. `country` is the company's country;
   `lead_owner` is a free-text "who actually reached out first" field, separate from `owner_id`
   (which just controls which tab a lead shows under) — see `CLAUDE.md` for how the two differ.
-- **`todo_items`** — Sanjay's to-do list: one row per task, grouped by `tier` (1–6, matching the priority sections) and ordered by `position` within it.
-- **`todo_outline`** — Krishna's to-do list: a different shape entirely, since he wanted his existing iCloud Notes outline format kept as-is rather than the tier structure above. It's a tree (`parent_id` points to the containing node, `list_style` is `none`/`numbered`/`dashed` for how that node renders in its parent's list, `content` can hold `**bold**` spans). The web app renders whichever of `todo_items`/`todo_outline` matches the account being viewed — Sanjay's tab always shows the tier view, Krishna's always shows the outline, regardless of who's looking.
+- **`todo_outline`** — everyone's to-do list, one shared format: a tree (`parent_id` points to
+  the containing node, `null` = a top-level section). `list_style` is `none`/`numbered`/`dashed`
+  for how that node renders inside its parent's list, `content` can hold `**bold**` spans.
+  `done` only matters on `numbered`/`dashed` nodes — checking one collapses it into a
+  "Completed" section in the UI without changing its place in the tree. The web app renders the
+  same outline UI for every account; only the data (scoped by `owner_id`) differs. (There's a
+  legacy `todo_items` table, a flat tier-based list Sanjay used before his to-do list was
+  migrated to this same outline format — it's no longer read or written by the app, kept only
+  for historical value.)
 - **`outbound_emails`** — one row per first-time-recipient email detected in Gmail (sender, recipient, thread, timestamp). Feeds the weekly "who emailed how many new contacts" rollup and drives the stage auto-flips above.
 - All four tables have an **`owner_id`**. Everyone signed in can read every row (so you can check in on each other), but row-level security only lets you insert/update/delete rows you own. The topbar's name switcher picks whose data the page is showing; the other person's view is read-only.
 
