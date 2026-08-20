@@ -58,7 +58,13 @@ It's plain HTML/CSS/JS — no build step, no framework. Edit a file, commit, pus
   legacy `todo_items` table, a flat tier-based list Sanjay used before his to-do list was
   migrated to this same outline format — it's no longer read or written by the app, kept only
   for historical value.)
+- **`daily_musts`** — the "3 Musts Today" card above the to-do list: one row per `(owner_id,
+  slot)`, slot 1/2/3. Slot 1 is a fixed daily habit ("make 5 cold calls or send 5 cold emails")
+  that resets to unchecked every Hong Kong day and just disappears off the card once checked —
+  no archive. Slots 2/3 are free text for whatever's most revenue-driving that day, typed in by
+  hand; they carry over across days until checked, at which point they clear immediately rather
+  than being archived either.
 - **`outbound_emails`** — one row per first-time-recipient email detected in Gmail (sender, recipient, thread, timestamp). Feeds the weekly "who emailed how many new contacts" rollup and drives the stage auto-flips above.
-- All four tables have an **`owner_id`**. Everyone signed in can read every row (so you can check in on each other), but row-level security only lets you insert/update/delete rows you own. The topbar's name switcher picks whose data the page is showing; the other person's view is read-only.
+- All tables have an **`owner_id`**. Everyone signed in can read every row (so you can check in on each other), but row-level security only lets you insert/update/delete rows you own. The topbar's name switcher picks whose data the page is showing; the other person's view is read-only.
 
 All four tables are realtime-enabled, so any change — a checkbox, an edited line, a new lead, a logged email — appears for everyone with the page open, instantly, no refresh needed.

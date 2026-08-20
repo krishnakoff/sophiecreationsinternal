@@ -300,6 +300,30 @@ curl -s -X POST "$SUPABASE_URL/rest/v1/todo_outline" \
 A brand new top-level section is the same insert with `"parent_id": null`. Editing content or
 toggling `done` is a PATCH to `todo_outline?id=eq.<id>` with just the changed field.
 
+## "3 Musts Today"
+
+A small card at the top of the to-do view, table `public.daily_musts`, one row per `(owner_id,
+slot)` with `slot` 1/2/3 — separate from `todo_outline` on purpose, since these three don't
+belong in the outline's history/tree at all.
+
+- **Slot 1** is always fixed: "Make 5 cold calls or send 5 cold emails." It resets to unchecked
+  every day at Hong Kong midnight (`reset_date` holds the last HK calendar date its `done` applies
+  to; the app compares against today's HK date on load and flips it back to unchecked once
+  stale — no cron needed). Checking it just makes it disappear off the card for the rest of that
+  HK day; it isn't archived anywhere.
+- **Slots 2/3** are free text — whatever's most revenue-driving that day, filled in by hand by
+  whoever's chatting (or by you, if asked — "set my musts for today"). Deliberately **not**
+  auto-pulled from `todo_outline`: Krishna's outline is organized by client/section, not by
+  priority, so picking "the most revenue-driving open item" algorithmically would just be making
+  the same daily judgment call a person can make in ten seconds. They carry over unchanged across
+  days (no date gating) until checked done, at which point the app clears `content` back to `''`
+  immediately — same "just disappear, don't archive" behavior as slot 1, just without the daily
+  reset. The focus here is B2B revenue (pricing, samples, closing a deal) — not routine B2C
+  collections work, which tends to be a quick WhatsApp message away regardless.
+
+Setting slot 2/3 by chat request is a PATCH: `daily_musts?owner_id=eq.<id>&slot=eq.<2 or 3>` with
+`{"content": "...", "done": false}`.
+
 ## Other rules
 
 - Never touch the seed/schema RLS policies without checking with Krishna first — they're what

@@ -91,6 +91,26 @@ create table if not exists public.todo_outline (
   updated_at timestamptz not null default now()
 );
 
+-- ---------- daily_musts ("3 Musts Today" — one fixed daily habit + two carried-over focus items) ----------
+-- slot 1 is always the fixed "make 5 cold calls or send 5 cold emails" habit — reset_date tracks
+-- the last Hong-Kong calendar date its done=true applies to; the app treats it as unchecked once
+-- reset_date is stale (a new HK day has started) and only the owner's own session writes that
+-- reset back, since RLS only allows writing your own rows. Slots 2/3 are free text either person
+-- types in by hand for whatever's most revenue-driving that day — they carry over unchanged
+-- across days (no date gating) until checked done, at which point the app clears content back to
+-- '' immediately so the slot is ready for the next thing. None of the three slots archive when
+-- checked — done items just disappear from the card instead of collapsing into a history list.
+create table if not exists public.daily_musts (
+  id uuid primary key default gen_random_uuid(),
+  owner_id uuid not null references auth.users(id) default auth.uid(),
+  slot smallint not null check (slot in (1, 2, 3)),
+  content text not null default '',
+  done boolean not null default false,
+  reset_date date,
+  updated_at timestamptz not null default now(),
+  unique (owner_id, slot)
+);
+
 -- ---------- keep updated_at fresh ----------
 create or replace function public.touch_updated_at()
 returns trigger language plpgsql as $$
@@ -108,11 +128,16 @@ drop trigger if exists todo_items_touch_updated_at on public.todo_items;
 create trigger todo_items_touch_updated_at before update on public.todo_items
   for each row execute function public.touch_updated_at();
 
+drop trigger if exists daily_musts_touch_updated_at on public.daily_musts;
+create trigger daily_musts_touch_updated_at before update on public.daily_musts
+  for each row execute function public.touch_updated_at();
+
 -- ---------- row level security: everyone signed in can read everything; you can only write your own rows ----------
 alter table public.leads enable row level security;
 alter table public.todo_items enable row level security;
 alter table public.outbound_emails enable row level security;
 alter table public.todo_outline enable row level security;
+alter table public.daily_musts enable row level security;
 
 drop policy if exists "authenticated full access" on public.leads;
 drop policy if exists "authenticated read all" on public.leads;
@@ -168,6 +193,19 @@ create policy "authenticated update own" on public.todo_outline
 create policy "authenticated delete own" on public.todo_outline
   for delete using (auth.uid() = owner_id);
 
+drop policy if exists "authenticated read all" on public.daily_musts;
+drop policy if exists "authenticated insert own" on public.daily_musts;
+drop policy if exists "authenticated update own" on public.daily_musts;
+drop policy if exists "authenticated delete own" on public.daily_musts;
+create policy "authenticated read all" on public.daily_musts
+  for select using (auth.role() = 'authenticated');
+create policy "authenticated insert own" on public.daily_musts
+  for insert with check (auth.uid() = owner_id);
+create policy "authenticated update own" on public.daily_musts
+  for update using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+create policy "authenticated delete own" on public.daily_musts
+  for delete using (auth.uid() = owner_id);
+
 create index if not exists leads_owner_id_idx on public.leads(owner_id);
 create index if not exists todo_items_owner_id_idx on public.todo_items(owner_id);
 create index if not exists outbound_emails_owner_id_idx on public.outbound_emails(owner_id);
@@ -175,12 +213,14 @@ create index if not exists outbound_emails_sent_at_idx on public.outbound_emails
 create index if not exists outbound_emails_recipient_idx on public.outbound_emails(recipient_email);
 create index if not exists todo_outline_owner_id_idx on public.todo_outline(owner_id);
 create index if not exists todo_outline_parent_id_idx on public.todo_outline(parent_id);
+create index if not exists daily_musts_owner_id_idx on public.daily_musts(owner_id);
 
 -- ---------- realtime: push live changes to every connected browser ----------
 alter publication supabase_realtime add table public.leads;
 alter publication supabase_realtime add table public.todo_items;
 alter publication supabase_realtime add table public.outbound_emails;
 alter publication supabase_realtime add table public.todo_outline;
+alter publication supabase_realtime add table public.daily_musts;
 
 -- ---------- seed the 30 priority items (safe to run once; skipped if already seeded) ----------
 -- Requires the admin account (Sanjay) to already exist (Authentication -> Users -> Add user, email sanjay@sophiecreations.net).
@@ -224,3 +264,16 @@ from (values
   (6, 4, 'Explore client segments beyond your current base', 'Most clients are Indian — test other nationalities and markets.', false)
 ) as seed(tier, position, title, note, done)
 where not exists (select 1 from public.todo_items);
+
+-- ---------- seed the "3 Musts Today" slots for both accounts (safe to run once) ----------
+insert into public.daily_musts (owner_id, slot, content, done)
+select owner_id, slot, content, false
+from (values
+  ('87133383-89c3-468e-96b5-1cce2455edc7'::uuid, 1, 'Make 5 cold calls or send 5 cold emails'),
+  ('87133383-89c3-468e-96b5-1cce2455edc7'::uuid, 2, ''),
+  ('87133383-89c3-468e-96b5-1cce2455edc7'::uuid, 3, ''),
+  ('cd66a924-67ec-4ecf-90a9-54edc57d3966'::uuid, 1, 'Make 5 cold calls or send 5 cold emails'),
+  ('cd66a924-67ec-4ecf-90a9-54edc57d3966'::uuid, 2, ''),
+  ('cd66a924-67ec-4ecf-90a9-54edc57d3966'::uuid, 3, '')
+) as seed(owner_id, slot, content)
+where not exists (select 1 from public.daily_musts);

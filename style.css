@@ -181,6 +181,22 @@ tbody tr:hover td{ background:var(--panel-2); }
   border:1px dashed var(--hairline); border-radius:10px;
 }
 
+/* ---------- 3 Musts Today ---------- */
+.musts-card{
+  border:1px solid var(--hairline); border-radius:10px; padding:16px 18px 6px; margin-bottom:28px;
+  background:var(--panel);
+}
+.musts-heading{
+  font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em;
+  color:var(--accent); margin-bottom:8px;
+}
+.must-row{ display:flex; align-items:flex-start; gap:12px; padding:9px 0; border-top:1px solid var(--hairline); }
+.must-row:first-of-type{ border-top:none; }
+.must-content{ flex:1; min-width:0; font-size:14px; color:var(--ink); line-height:1.5; cursor:text; outline:none; padding-top:1px; }
+.must-content[contenteditable="false"]{ cursor:default; }
+.must-content:empty:before{ content:attr(data-placeholder); color:var(--muted-2); }
+.musts-empty{ font-size:13px; color:var(--muted); padding:9px 0; }
+
 /* ---------- To-Do ---------- */
 .progress-wrap{ margin:18px 0 32px; }
 .progress-bar-bg{ width:100%; height:7px; background:var(--hairline); border-radius:4px; overflow:hidden; }
@@ -218,7 +234,7 @@ ul.items{ list-style:none; margin:0; padding:0; border-top:1px solid var(--hairl
 
 .footnote{ font-size:12.5px; color:var(--muted); margin-top:36px; padding-top:18px; border-top:1px solid var(--hairline); line-height:1.6; }
 
-/* ---------- To-Do outline (Krishna) ---------- */
+/* ---------- To-Do outline (shared by every account) ---------- */
 .outline-list{ margin:0; }
 .outline-node{ margin:3px 0; }
 .outline-node > .outline-list{ margin-left:22px; }

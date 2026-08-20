@@ -26,11 +26,18 @@ let session = null;
 let leads = [];
 let outlineNodes = [];
 let outlineCompletedCollapsed = true;
+let dailyMusts = [];
 let realtimeReady = false;
 let viewingOwnerId = null;
 
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// Hong Kong is the fixed reset boundary for the daily "5 calls/emails" habit, regardless of
+// whichever timezone Krishna or Sanjay happen to be in when they open the app.
+function hkDateToday() {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Hong_Kong" });
 }
 
 // ---------- auth ----------
@@ -110,7 +117,7 @@ document.querySelectorAll("nav.tabs button").forEach(btn => {
 
 // ---------- data + realtime ----------
 async function loadAll() {
-  await Promise.all([loadLeads(), loadOutline(), loadOutboundStats()]);
+  await Promise.all([loadLeads(), loadOutline(), loadOutboundStats(), loadMusts()]);
   subscribeRealtime();
 }
 
@@ -130,6 +137,13 @@ function subscribeRealtime() {
   sb.channel("public:outbound_emails")
     .on("postgres_changes", { event: "*", schema: "public", table: "outbound_emails" }, loadOutboundStats)
     .subscribe();
+  sb.channel("public:daily_musts")
+    .on("postgres_changes", { event: "*", schema: "public", table: "daily_musts" }, () => {
+      const active = document.activeElement;
+      if (active && active.classList && active.classList.contains("must-content")) return; // don't yank focus mid-edit
+      loadMusts();
+    })
+    .subscribe();
 }
 
 async function loadLeads() {
@@ -142,6 +156,27 @@ async function loadOutline() {
   const { data, error } = await sb.from("todo_outline").select("*").eq("owner_id", viewingOwnerId).order("position");
   if (!error) { outlineNodes = data || []; renderTodo(); }
   else console.error("loadOutline:", error.message);
+}
+
+async function loadMusts() {
+  const { data, error } = await sb.from("daily_musts").select("*").eq("owner_id", viewingOwnerId).order("slot");
+  if (error) { console.error("loadMusts:", error.message); return; }
+  dailyMusts = data || [];
+
+  // Slot 1 (the fixed daily habit) unchecks itself once a new Hong Kong day has started.
+  // Only the owner's own session can write that reset back (RLS), so a cross-view of a stale
+  // slot 1 still displays as unchecked, it just won't be persisted until that owner loads it.
+  const today = hkDateToday();
+  const slot1 = dailyMusts.find(m => m.slot === 1);
+  if (slot1 && slot1.done && slot1.reset_date !== today) {
+    slot1.done = false;
+    if (isOwnData()) {
+      sb.from("daily_musts").update({ done: false, reset_date: today }).eq("id", slot1.id)
+        .then(({ error }) => { if (error) console.error("loadMusts reset:", error.message); });
+    }
+  }
+
+  renderMusts();
 }
 
 // ---------- CRM ----------
@@ -316,6 +351,80 @@ function renderCrm() {
 // ---------- To-Do (shared outline format for every account) ----------
 function renderTodo() {
   renderOutline();
+}
+
+// ---------- 3 Musts Today ----------
+const MUST_1_LABEL = "Make 5 cold calls or send 5 cold emails";
+
+function renderMusts() {
+  const own = isOwnData();
+  const visible = dailyMusts
+    .filter(m => !m.done)
+    .filter(m => own || m.slot === 1 || m.content.trim()) // don't show empty, uneditable slots on a read-only view
+    .sort((a, b) => a.slot - b.slot);
+
+  const rows = visible.map(m => {
+    const isFixed = m.slot === 1;
+    const editable = own && !isFixed;
+    const placeholder = !isFixed ? ' data-placeholder="+ Add a focus for today"' : "";
+    const content = isFixed ? MUST_1_LABEL : escapeHtml(m.content);
+    return `
+      <div class="must-row">
+        <span class="checkbox${own ? "" : " disabled"}" data-action="must-toggle" data-slot="${m.slot}">
+          <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><path d="M4 12l6 6L20 6"/></svg>
+        </span>
+        <div class="must-content" contenteditable="${editable}" data-slot="${m.slot}"${placeholder}>${content}</div>
+      </div>
+    `;
+  }).join("");
+
+  document.getElementById("musts-wrap").innerHTML = `
+    <div class="musts-card">
+      <div class="musts-heading">3 Musts Today</div>
+      ${rows || '<div class="musts-empty">All clear for today.</div>'}
+    </div>
+  `;
+
+  document.querySelectorAll('#musts-wrap .checkbox[data-action="must-toggle"]:not(.disabled)').forEach(cb => {
+    cb.addEventListener("click", e => {
+      e.stopPropagation();
+      toggleMust(Number(cb.dataset.slot));
+    });
+  });
+
+  document.querySelectorAll('#musts-wrap .must-content[contenteditable="true"]').forEach(el => {
+    el.addEventListener("click", e => e.stopPropagation());
+    el.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); el.blur(); } });
+    el.addEventListener("blur", () => saveMustContent(Number(el.dataset.slot), el.innerText.trim()));
+  });
+}
+
+async function toggleMust(slot) {
+  const m = dailyMusts.find(x => x.slot === slot);
+  if (!m) return;
+
+  if (slot === 1) {
+    m.done = true;
+    m.reset_date = hkDateToday();
+    renderMusts();
+    const { error } = await sb.from("daily_musts").update({ done: true, reset_date: m.reset_date }).eq("id", m.id);
+    if (error) console.error("toggleMust:", error.message);
+  } else {
+    // Slots 2/3 aren't archived either — "done" just clears the slot, ready for the next thing.
+    m.content = "";
+    m.done = false;
+    renderMusts();
+    const { error } = await sb.from("daily_musts").update({ content: "", done: false }).eq("id", m.id);
+    if (error) console.error("toggleMust:", error.message);
+  }
+}
+
+async function saveMustContent(slot, text) {
+  const m = dailyMusts.find(x => x.slot === slot);
+  if (!m || text === m.content) return;
+  m.content = text;
+  const { error } = await sb.from("daily_musts").update({ content: text }).eq("id", m.id);
+  if (error) console.error("saveMustContent:", error.message);
 }
 
 function parseBold(text) {
