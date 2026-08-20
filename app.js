@@ -776,12 +776,6 @@ function renderOutlineList(nodes, own) {
 }
 
 function renderOutline() {
-  const actionable = outlineNodes.filter(n => n.list_style !== "none");
-  const total = actionable.length;
-  const done = actionable.filter(n => n.done).length;
-  document.getElementById("fill").style.width = (total ? done / total * 100 : 0) + "%";
-  document.getElementById("progLabel").textContent = done + " of " + total + " done";
-
   const own = isOwnData();
   const tree = buildOutlineTree(outlineNodes);
   const completed = [];
