@@ -1,4 +1,19 @@
-const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// "Keep me signed in" support: the session token itself is routed to localStorage (persists
+// across browser restarts) or sessionStorage (cleared when the browser/tab closes) depending
+// on the checkbox at the moment of sign-in. The preference flag is always kept in localStorage
+// (it's not sensitive) so the checkbox reflects the last choice on the next visit.
+const KEEP_SIGNED_IN_KEY = "sophie_keep_signed_in";
+function keepSignedInPreferred() { return localStorage.getItem(KEEP_SIGNED_IN_KEY) !== "false"; }
+function authStorage() { return keepSignedInPreferred() ? localStorage : sessionStorage; }
+const customAuthStorage = {
+  getItem: key => authStorage().getItem(key),
+  setItem: (key, value) => authStorage().setItem(key, value),
+  removeItem: key => authStorage().removeItem(key)
+};
+
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: { storage: customAuthStorage, persistSession: true, autoRefreshToken: true }
+});
 
 const TIERS = [
   { n: 1, heading: "1. Collect money already earned", note: "Confirmed orders, quotes already sent — these are just a call or WhatsApp away from cash in hand." },
@@ -37,10 +52,14 @@ async function initAuth() {
   sb.auth.onAuthStateChange((_event, s2) => { session = s2; renderShell(); });
 }
 
+document.getElementById("keep-signed-in").checked = keepSignedInPreferred();
+
 document.getElementById("login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const email = document.getElementById("login-email").value.trim();
   const password = document.getElementById("login-password").value;
+  const keepSignedIn = document.getElementById("keep-signed-in").checked;
+  localStorage.setItem(KEEP_SIGNED_IN_KEY, keepSignedIn ? "true" : "false");
   const errBox = document.getElementById("login-error");
   errBox.hidden = true;
   const { error } = await sb.auth.signInWithPassword({ email, password });
@@ -316,6 +335,23 @@ function renderTodo() {
   renderTierTodo();
 }
 
+let tierCompletedCollapsed = true;
+
+function renderTierItemRow(item, own) {
+  return `
+    <li class="item" data-id="${item.id}">
+      <span class="num">${item.position}</span>
+      <span class="checkbox${item.done ? " checked" : ""}${own ? "" : " disabled"}" data-action="toggle" data-id="${item.id}" data-done="${item.done}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><path d="M4 12l6 6L20 6"/></svg>
+      </span>
+      <span class="item-body">
+        <div class="item-title" contenteditable="${own}" data-id="${item.id}" data-field="title">${escapeHtml(item.title)}</div>
+        <div class="item-note" contenteditable="${own}" data-id="${item.id}" data-field="note">${escapeHtml(item.note)}</div>
+      </span>
+    </li>
+  `;
+}
+
 function renderTierTodo() {
   const total = todoItems.length;
   const done = todoItems.filter(i => i.done).length;
@@ -323,22 +359,13 @@ function renderTierTodo() {
   document.getElementById("progLabel").textContent = done + " of " + total + " done";
 
   const own = isOwnData();
+  const activeItems = todoItems.filter(i => !i.done);
+  const completedItems = todoItems.filter(i => i.done).sort((a, b) => a.tier - b.tier || a.position - b.position);
 
-  const html = TIERS.map(tier => {
-    const items = todoItems.filter(i => i.tier === tier.n).sort((a, b) => a.position - b.position);
+  let html = TIERS.map(tier => {
+    const items = activeItems.filter(i => i.tier === tier.n).sort((a, b) => a.position - b.position);
     if (!items.length && !own) return "";
-    const rows = items.map(item => `
-      <li class="item${item.done ? " done" : ""}" data-id="${item.id}">
-        <span class="num">${item.position}</span>
-        <span class="checkbox${item.done ? " checked" : ""}${own ? "" : " disabled"}" data-action="toggle" data-id="${item.id}" data-done="${item.done}">
-          <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><path d="M4 12l6 6L20 6"/></svg>
-        </span>
-        <span class="item-body">
-          <div class="item-title" contenteditable="${own}" data-id="${item.id}" data-field="title">${escapeHtml(item.title)}</div>
-          <div class="item-note" contenteditable="${own}" data-id="${item.id}" data-field="note">${escapeHtml(item.note)}</div>
-        </span>
-      </li>
-    `).join("");
+    const rows = items.map(item => renderTierItemRow(item, own)).join("");
     return `
       <div class="tier">
         <div class="tier-heading">${escapeHtml(tier.heading)}</div>
@@ -349,17 +376,25 @@ function renderTierTodo() {
     `;
   }).join("");
 
+  if (completedItems.length) {
+    html += `
+      <div class="completed-section">
+        <button type="button" id="tier-completed-toggle" class="completed-toggle">
+          ${tierCompletedCollapsed ? "&#9656;" : "&#9662;"} Completed (${completedItems.length})
+        </button>
+        <ul class="items completed-list"${tierCompletedCollapsed ? " hidden" : ""}>
+          ${completedItems.map(item => renderTierItemRow(item, own)).join("")}
+        </ul>
+      </div>
+    `;
+  }
+
   document.getElementById("todo-wrap").innerHTML = html;
 
   document.querySelectorAll('.checkbox[data-action="toggle"]:not(.disabled)').forEach(cb => {
     cb.addEventListener("click", (e) => {
       e.stopPropagation();
-      const id = cb.dataset.id;
-      const nowDone = cb.dataset.done !== "true";
-      cb.closest(".item").classList.toggle("done", nowDone);
-      cb.classList.toggle("checked", nowDone);
-      cb.dataset.done = String(nowDone);
-      toggleDone(id, nowDone);
+      toggleDone(cb.dataset.id, cb.dataset.done !== "true");
     });
   });
 
@@ -371,6 +406,12 @@ function renderTierTodo() {
 
   document.querySelectorAll(".add-item-btn").forEach(btn => {
     btn.addEventListener("click", () => addTodoItem(Number(btn.dataset.tier)));
+  });
+
+  const completedToggle = document.getElementById("tier-completed-toggle");
+  if (completedToggle) completedToggle.addEventListener("click", () => {
+    tierCompletedCollapsed = !tierCompletedCollapsed;
+    renderTierTodo();
   });
 }
 
@@ -483,11 +524,11 @@ function renderOutline() {
 
   if (completed.length) {
     html += `
-      <div class="outline-completed">
-        <button type="button" id="outline-completed-toggle" class="outline-completed-toggle">
+      <div class="completed-section">
+        <button type="button" id="outline-completed-toggle" class="completed-toggle">
           ${outlineCompletedCollapsed ? "&#9656;" : "&#9662;"} Completed (${completed.length})
         </button>
-        <div class="outline-completed-list"${outlineCompletedCollapsed ? " hidden" : ""}>
+        <div class="completed-list"${outlineCompletedCollapsed ? " hidden" : ""}>
           ${renderOutlineList(completed, own)}
         </div>
       </div>

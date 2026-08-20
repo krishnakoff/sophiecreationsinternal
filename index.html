@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Public+Sans:wght@400;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=8">
+<link rel="stylesheet" href="style.css?v=9">
 </head>
 <body>
 
@@ -17,6 +17,7 @@
     <p class="login-sub">Sign in with the account Sanjay set up for you.</p>
     <label>Email<input type="email" id="login-email" required autocomplete="username"></label>
     <label>Password<input type="password" id="login-password" required autocomplete="current-password"></label>
+    <label class="keep-signed-in"><input type="checkbox" id="keep-signed-in" checked>Keep me signed in</label>
     <div id="login-error" class="login-error" hidden></div>
     <button type="submit">Sign in</button>
   </form>
@@ -58,6 +59,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="config.js?v=2"></script>
-<script src="app.js?v=7"></script>
+<script src="app.js?v=8"></script>
 </body>
 </html>
