@@ -130,7 +130,7 @@ function subscribeRealtime() {
   sb.channel("public:todo_outline")
     .on("postgres_changes", { event: "*", schema: "public", table: "todo_outline" }, () => {
       const active = document.activeElement;
-      if (active && active.classList && active.classList.contains("outline-content")) return; // don't yank focus mid-edit
+      if (active && active.classList && active.classList.contains("outline-editable")) return; // don't yank focus mid-edit
       loadOutline();
     })
     .subscribe();
@@ -550,9 +550,12 @@ function placeCaretNear(el, x, y) {
 }
 
 function navigableOutlineFields() {
-  return Array.from(document.querySelectorAll('#todo-wrap .outline-content[contenteditable="true"]'));
+  return Array.from(document.querySelectorAll('#todo-wrap .outline-content'));
 }
 
+// The whole outline is one shared contenteditable region (see renderOutline), so the ancestor
+// stays focused throughout — moving the caret between rows only needs a Range/Selection change,
+// never re-focusing an individual row (they aren't separately focusable elements any more).
 function outlineArrowKey(e, el) {
   if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
   const rect = getCaretClientRect(el);
@@ -565,7 +568,6 @@ function outlineArrowKey(e, el) {
     if (next) {
       e.preventDefault();
       const targetRect = next.getBoundingClientRect();
-      next.focus();
       placeCaretNear(next, x, targetRect.top + 2);
     }
   } else if (e.key === "ArrowUp" && caretOnFirstLine(el)) {
@@ -573,7 +575,6 @@ function outlineArrowKey(e, el) {
     if (prev) {
       e.preventDefault();
       const targetRect = prev.getBoundingClientRect();
-      prev.focus();
       placeCaretNear(prev, x, targetRect.bottom - 2);
     }
   }
@@ -605,8 +606,11 @@ function defaultChildStyle(node) {
 // New nodes get a temp- id immediately (so they're focusable/typeable at once) and get relabeled
 // to their real uuid in place once the insert resolves, with no re-render (so an in-progress edit
 // is never disturbed). Anything that needs to write to a node by id — including a second Enter
-// fired before the first node's insert has confirmed — awaits `resolveOutlineId` first so it
-// never sends a temp- id to the database.
+// fired before the first node's insert has confirmed, or a debounced content save that fires long
+// after — awaits `resolveOutlineId` first so it never sends a temp- id to the database.
+// pendingOutlineIds[tempId] holds the in-flight insert Promise while it's pending, then the
+// resolved real id itself afterward (not deleted) — a debounced save can look up a temp id well
+// after its insert already resolved, and `await` on a plain string just yields that string back.
 const pendingOutlineIds = {};
 async function resolveOutlineId(id) {
   if (!id || !id.startsWith("temp-")) return id;
@@ -614,8 +618,17 @@ async function resolveOutlineId(id) {
   return pending ? (await pending) || id : id;
 }
 
+// A node's own `.id` field gets overwritten to its real uuid the moment an insert resolves (see
+// insertOptimisticOutlineNode), so looking it up by a temp id that's already resolved would find
+// nothing — check the temp id first (covers the still-in-flight case) and fall back to whatever
+// it resolved to (covers the case where the insert beat this call, e.g. a debounced content save
+// firing well after a fast insert).
+function findOutlineNodeByAnyId(id) {
+  return outlineNodes.find(n => n.id === id) || outlineNodes.find(n => n.id === pendingOutlineIds[id]);
+}
+
 async function toggleOutlineDone(id, done) {
-  const node = outlineNodes.find(n => n.id === id);
+  const node = findOutlineNodeByAnyId(id);
   if (node) { node.done = done; renderTodo(); }
   const realId = await resolveOutlineId(id);
   const { error } = await sb.from("todo_outline").update({ done }).eq("id", realId);
@@ -624,22 +637,164 @@ async function toggleOutlineDone(id, done) {
 
 async function saveOutlineContent(id, el) {
   const content = serializeOutlineEditable(el);
-  const node = outlineNodes.find(n => n.id === id);
+  const node = findOutlineNodeByAnyId(id);
   if (node) node.content = content;
   const realId = await resolveOutlineId(id);
   const { error } = await sb.from("todo_outline").update({ content }).eq("id", realId);
   if (error) console.error("saveOutlineContent:", error.message);
 }
 
+// The whole outline is one shared contenteditable region (see renderOutline) rather than one
+// field per row, so plain typing no longer fires a per-row blur to save on — instead every
+// keystroke schedules a debounced save for whichever row the caret is currently in, and anything
+// that mutates a row directly (split, merge, multi-row replace) cancels that row's pending timer
+// first so a stale debounce can never fire afterward and clobber the fresh content with an old
+// captured snapshot of the DOM node.
+const saveDebounceTimers = {};
+function cancelPendingSave(id) {
+  if (saveDebounceTimers[id]) { clearTimeout(saveDebounceTimers[id]); delete saveDebounceTimers[id]; }
+}
+function scheduleOutlineSave(id, el) {
+  cancelPendingSave(id);
+  saveDebounceTimers[id] = setTimeout(() => {
+    delete saveDebounceTimers[id];
+    if (!findOutlineNodeByAnyId(id)) return; // row was deleted before the debounce fired
+    saveOutlineContent(id, el);
+  }, 500);
+}
+function flushPendingSaves() {
+  Object.keys(saveDebounceTimers).forEach(id => {
+    clearTimeout(saveDebounceTimers[id]);
+    delete saveDebounceTimers[id];
+    const el = document.querySelector(`.outline-content[data-id="${id}"]`);
+    if (el) saveOutlineContent(id, el);
+  });
+}
+
+// Focuses the shared editable ancestor (not the row itself — rows aren't separately focusable)
+// then places the caret/selection inside the given row.
+function focusOutlineAncestorOf(el) {
+  const editable = el && el.closest(".outline-editable");
+  if (editable) editable.focus();
+}
+
 function selectAllInOutlineNode(id) {
   const el = document.querySelector(`.outline-content[data-id="${id}"]`);
   if (!el) return;
-  el.focus();
+  focusOutlineAncestorOf(el);
   const range = document.createRange();
   range.selectNodeContents(el);
   const sel = window.getSelection();
   sel.removeAllRanges();
   sel.addRange(range);
+}
+
+// Finds the .outline-content row the caret is currently sitting in, if any.
+function currentOutlineRow() {
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return null;
+  let node = sel.getRangeAt(0).startContainer;
+  if (node.nodeType === Node.TEXT_NODE) node = node.parentElement;
+  return node ? node.closest(".outline-content") : null;
+}
+
+// Resolves the current selection down to the .outline-content rows its start and end fall in,
+// so a drag-selection spanning multiple rows can be reasoned about as a row range.
+function getSelectionRowSpan() {
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return null;
+  const range = sel.getRangeAt(0);
+  let startNode = range.startContainer.nodeType === Node.TEXT_NODE ? range.startContainer.parentElement : range.startContainer;
+  let endNode = range.endContainer.nodeType === Node.TEXT_NODE ? range.endContainer.parentElement : range.endContainer;
+  const startEl = startNode && startNode.closest(".outline-content");
+  const endEl = endNode && endNode.closest(".outline-content");
+  if (!startEl || !endEl) return null;
+  return { range, startEl, endEl };
+}
+
+// Replaces whatever the current selection spans — a run of whole rows, or just part of one row
+// — with `lines` (one string per resulting row). Used for pasting a multi-line block over a
+// drag-selection, and for Backspace/Delete when a selection spans more than one row. Declines
+// (returns false, changes nothing) for selections that cross into a different nesting level, or
+// that touch a row with children — those are rare/structurally risky cases, left to whatever the
+// browser does natively rather than risking a bad reconciliation.
+async function replaceOutlineSelectionRange(lines) {
+  const span = getSelectionRowSpan();
+  if (!span) return false;
+  const { range, startEl, endEl } = span;
+
+  const startId = startEl.dataset.id;
+  const endId = endEl.dataset.id;
+  const startNode = outlineNodes.find(n => n.id === startId);
+  const endNode = outlineNodes.find(n => n.id === endId);
+  if (!startNode || !endNode) return false;
+  if ((startNode.parent_id || null) !== (endNode.parent_id || null)) return false;
+
+  const siblings = outlineNodes
+    .filter(n => (n.parent_id || null) === (startNode.parent_id || null))
+    .sort((a, b) => a.position - b.position);
+  const startIdx = siblings.findIndex(n => n.id === startId);
+  const endIdx = siblings.findIndex(n => n.id === endId);
+  if (startIdx === -1 || endIdx === -1 || startIdx > endIdx) return false;
+
+  const rowsInRange = siblings.slice(startIdx, endIdx + 1);
+  if (rowsInRange.some(n => outlineNodes.some(c => c.parent_id === n.id))) return false;
+
+  const beforeRange = document.createRange();
+  beforeRange.selectNodeContents(startEl);
+  beforeRange.setEnd(range.startContainer, range.startOffset);
+  const beforeDiv = document.createElement("div");
+  beforeDiv.appendChild(beforeRange.cloneContents());
+  const prefix = serializeOutlineEditable(beforeDiv);
+
+  const afterRange = document.createRange();
+  afterRange.selectNodeContents(endEl);
+  afterRange.setStart(range.endContainer, range.endOffset);
+  const afterDiv = document.createElement("div");
+  afterDiv.appendChild(afterRange.cloneContents());
+  const suffix = serializeOutlineEditable(afterDiv);
+
+  const newLines = lines.length ? lines.slice() : [""];
+  newLines[0] = prefix + newLines[0];
+  newLines[newLines.length - 1] = newLines[newLines.length - 1] + suffix;
+
+  const deleteIds = rowsInRange.slice(1).map(n => n.id);
+  cancelPendingSave(startId);
+  deleteIds.forEach(cancelPendingSave);
+
+  startNode.content = newLines[0];
+  outlineNodes = outlineNodes.filter(n => !deleteIds.includes(n.id));
+
+  const remainingSiblings = outlineNodes
+    .filter(n => (n.parent_id || null) === (startNode.parent_id || null))
+    .sort((a, b) => a.position - b.position);
+  const afterIdx = remainingSiblings.findIndex(n => n.id === startId);
+  const nextSibling = remainingSiblings[afterIdx + 1];
+  const basePos = startNode.position;
+  const endPos = nextSibling ? nextSibling.position : basePos + 1;
+
+  let lastRowId = startId;
+  for (let i = 1; i < newLines.length; i++) {
+    const frac = basePos + (endPos - basePos) * (i / newLines.length);
+    const { tempId } = insertOptimisticOutlineNode(startNode.parent_id, frac, startNode.list_style, newLines[i]);
+    lastRowId = tempId;
+  }
+
+  renderTodo();
+
+  const lastLine = newLines[newLines.length - 1];
+  focusOutlineNode(lastRowId, Math.max(0, lastLine.length - suffix.length));
+
+  const realStartId = await resolveOutlineId(startId);
+  const ops = [sb.from("todo_outline").update({ content: startNode.content }).eq("id", realStartId)];
+  for (const delId of deleteIds) {
+    const realDelId = await resolveOutlineId(delId);
+    ops.push(sb.from("todo_outline").delete().eq("id", realDelId));
+  }
+  const results = await Promise.all(ops);
+  results.forEach(({ error }) => { if (error) console.error("replaceOutlineSelectionRange:", error.message); });
+
+  return true;
 }
 
 // Swaps a temp id for the real one everywhere it appears in the DOM, without touching the
@@ -658,15 +813,19 @@ function insertOptimisticOutlineNode(parentId, position, listStyle, content) {
     .insert({ owner_id: session.user.id, parent_id: parentId, position, list_style: listStyle, content })
     .select().single()
     .then(({ data, error }) => {
-      delete pendingOutlineIds[tempId];
       if (error) {
         console.error("insertOptimisticOutlineNode:", error.message);
+        delete pendingOutlineIds[tempId];
         outlineNodes = outlineNodes.filter(n => n.id !== tempId);
         renderTodo();
         return null;
       }
       Object.assign(optimisticNode, data);
       relabelOutlineNodeId(tempId, data.id);
+      // Keep this mapping (as the resolved id itself, not a pending promise) rather than
+      // deleting it — a debounced save can still look up this temp id well after the insert
+      // resolves, and resolveOutlineId needs something to return besides the temp id itself.
+      pendingOutlineIds[tempId] = data.id;
       return data.id;
     });
   pendingOutlineIds[tempId] = promise;
@@ -689,7 +848,7 @@ async function addOutlineSection() {
 function focusOutlineNode(id, offset) {
   const el = document.querySelector(`.outline-content[data-id="${id}"]`);
   if (!el) return;
-  el.focus();
+  focusOutlineAncestorOf(el);
   if (typeof offset === "number") placeCaretAtOffset(el, offset);
   else placeCaretAtStart(el);
 }
@@ -697,6 +856,7 @@ function focusOutlineNode(id, offset) {
 async function outlineEnterKey(el, id) {
   const node = outlineNodes.find(n => n.id === id);
   if (!node) return;
+  cancelPendingSave(id);
   const { before, after } = splitContentAtCaret(el);
 
   const siblings = outlineNodes
@@ -716,7 +876,21 @@ async function outlineEnterKey(el, id) {
   if (error) console.error("outlineEnterKey:", error.message);
 }
 
+// A non-collapsed selection spanning more than one row takes the multi-row replace path (same
+// one paste uses, just with empty replacement text); a selection within a single row is left to
+// the browser's native Backspace, since that's always worked fine on its own. Only a plain
+// collapsed caret at the start of a row falls through to the existing merge-with-previous logic.
 async function outlineBackspaceKey(e, el, id) {
+  const sel = window.getSelection();
+  if (sel.rangeCount && !sel.isCollapsed) {
+    const span = getSelectionRowSpan();
+    if (span && span.startEl !== span.endEl) {
+      e.preventDefault();
+      await replaceOutlineSelectionRange([""]);
+    }
+    return;
+  }
+
   if (!isCaretAtStart(el)) return;
   const node = outlineNodes.find(n => n.id === id);
   if (!node) return;
@@ -732,6 +906,8 @@ async function outlineBackspaceKey(e, el, id) {
   if (outlineNodes.some(n => n.parent_id === prev.id)) return; // previous has children — skip
 
   e.preventDefault();
+  cancelPendingSave(prev.id);
+  cancelPendingSave(id);
   const currentContent = serializeOutlineEditable(el);
   const caretPos = prev.content.length;
   const mergedContent = (prev.content + currentContent).trim();
@@ -748,6 +924,18 @@ async function outlineBackspaceKey(e, el, id) {
   ]);
 }
 
+// A non-collapsed selection spanning more than one row deletes the range (same path paste and
+// Backspace use); anything else is left to native behavior, matching how Delete already worked
+// (or rather, didn't do anything special) before this change.
+function outlineDeleteKey(e) {
+  const sel = window.getSelection();
+  if (!sel.rangeCount || sel.isCollapsed) return;
+  const span = getSelectionRowSpan();
+  if (!span || span.startEl === span.endEl) return;
+  e.preventDefault();
+  replaceOutlineSelectionRange([""]);
+}
+
 function renderOutlineList(nodes, own) {
   if (!nodes.length) return "";
   let numberIdx = 0;
@@ -756,25 +944,33 @@ function renderOutlineList(nodes, own) {
     if (n.list_style === "numbered") { numberIdx++; marker = numberIdx + "."; }
     else if (n.list_style === "dashed") { marker = "&ndash;"; }
     const isHeading = n.list_style === "none";
+    // checkbox/marker/add-btn are contenteditable="false" islands inside the shared editable
+    // region below (see renderOutline) — otherwise they'd be typeable/selectable text themselves.
     const checkbox = !isHeading ? `
-      <span class="checkbox${n.done ? " checked" : ""}${own ? "" : " disabled"}" data-action="outline-toggle" data-id="${n.id}" data-done="${n.done}">
+      <span class="checkbox${n.done ? " checked" : ""}${own ? "" : " disabled"}" contenteditable="false" data-action="outline-toggle" data-id="${n.id}" data-done="${n.done}">
         <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><path d="M4 12l6 6L20 6"/></svg>
       </span>` : "";
     return `
       <div class="outline-node ${isHeading ? "outline-heading" : "outline-item"}">
         <div class="outline-row">
           ${checkbox}
-          ${marker ? `<span class="outline-marker">${marker}</span>` : ""}
-          <div class="outline-content" contenteditable="${own}" data-id="${n.id}">${parseBold(n.content)}</div>
+          ${marker ? `<span class="outline-marker" contenteditable="false">${marker}</span>` : ""}
+          <div class="outline-content" data-id="${n.id}">${n.content ? parseBold(n.content) : "<br>"}</div>
         </div>
         ${renderOutlineList(n.children, own)}
-        ${own ? `<button type="button" class="outline-add-btn" data-parent-id="${n.id}" data-style="${defaultChildStyle(n)}">+ add</button>` : ""}
+        ${own ? `<button type="button" class="outline-add-btn" contenteditable="false" data-parent-id="${n.id}" data-style="${defaultChildStyle(n)}">+ add</button>` : ""}
       </div>
     `;
   }).join("");
   return `<div class="outline-list">${rows}</div>`;
 }
 
+// The whole tree (every depth, every section) renders inside one shared contenteditable div per
+// list (active vs. completed) rather than one per row — that's what lets a native mouse-drag
+// selection span multiple rows at all; browsers won't let a drag selection cross from one
+// contenteditable region into a separate one. Enter/Backspace/arrow-nav/paste are still fully
+// custom-handled (see initOutlineEditing below), so this doesn't hand line-splitting over to the
+// browser — it only unlocks selection, copy, and paste spanning rows.
 function renderOutline() {
   const own = isOwnData();
   const tree = buildOutlineTree(outlineNodes);
@@ -793,7 +989,7 @@ function renderOutline() {
   })(tree);
   completed.sort((a, b) => a.position - b.position);
 
-  let html = renderOutlineList(tree, own);
+  let html = `<div class="outline-editable" contenteditable="${own}">${renderOutlineList(tree, own)}</div>`;
   if (own) html += `<button type="button" id="outline-add-section-btn" class="add-item-btn">+ Add section</button>`;
 
   if (completed.length) {
@@ -803,7 +999,7 @@ function renderOutline() {
           ${outlineCompletedCollapsed ? "&#9656;" : "&#9662;"} Completed (${completed.length})
         </button>
         <div class="completed-list"${outlineCompletedCollapsed ? " hidden" : ""}>
-          ${renderOutlineList(completed, own)}
+          <div class="outline-editable" contenteditable="${own}">${renderOutlineList(completed, own)}</div>
         </div>
       </div>
     `;
@@ -812,23 +1008,15 @@ function renderOutline() {
   document.getElementById("todo-wrap").innerHTML = html;
 
   document.querySelectorAll('#todo-wrap .checkbox[data-action="outline-toggle"]:not(.disabled)').forEach(cb => {
+    cb.addEventListener("mousedown", e => e.preventDefault()); // don't disturb an active selection/caret
     cb.addEventListener("click", e => {
       e.stopPropagation();
       toggleOutlineDone(cb.dataset.id, cb.dataset.done !== "true");
     });
   });
 
-  document.querySelectorAll('#todo-wrap .outline-content[contenteditable="true"]').forEach(el => {
-    el.addEventListener("click", e => e.stopPropagation());
-    el.addEventListener("keydown", e => {
-      if (e.key === "Enter") { e.preventDefault(); outlineEnterKey(el, el.dataset.id); }
-      else if (e.key === "Backspace") { outlineBackspaceKey(e, el, el.dataset.id); }
-      else if (e.key === "ArrowDown" || e.key === "ArrowUp") { outlineArrowKey(e, el); }
-    });
-    el.addEventListener("blur", () => saveOutlineContent(el.dataset.id, el));
-  });
-
   document.querySelectorAll("#todo-wrap .outline-add-btn").forEach(btn => {
+    btn.addEventListener("mousedown", e => e.preventDefault());
     btn.addEventListener("click", () => addOutlineNode(btn.dataset.parentId, btn.dataset.style));
   });
 
@@ -842,4 +1030,49 @@ function renderOutline() {
   });
 }
 
+// Attached once to the stable #todo-wrap element (renderOutline only ever replaces its
+// innerHTML, never the element itself), delegating to whichever row the selection is currently
+// in — the individual rows aren't separately focusable any more, so per-row listeners no longer
+// make sense. Guarded by isOwnData() since read-only views never render an editable region at all.
+let outlineEditingInitialized = false;
+function initOutlineEditing() {
+  if (outlineEditingInitialized) return;
+  outlineEditingInitialized = true;
+  const wrap = document.getElementById("todo-wrap");
+
+  wrap.addEventListener("keydown", e => {
+    if (!isOwnData()) return;
+    if (e.key === "Delete") { outlineDeleteKey(e); return; }
+    const el = currentOutlineRow();
+    if (!el) return;
+    if (e.key === "Enter") { e.preventDefault(); outlineEnterKey(el, el.dataset.id); }
+    else if (e.key === "Backspace") { outlineBackspaceKey(e, el, el.dataset.id); }
+    else if (e.key === "ArrowDown" || e.key === "ArrowUp") { outlineArrowKey(e, el); }
+  });
+
+  wrap.addEventListener("input", () => {
+    if (!isOwnData()) return;
+    const el = currentOutlineRow();
+    if (!el) return;
+    scheduleOutlineSave(el.dataset.id, el);
+  });
+
+  wrap.addEventListener("paste", e => {
+    if (!isOwnData()) return;
+    const span = getSelectionRowSpan();
+    if (!span) return;
+    const text = (e.clipboardData || window.clipboardData).getData("text/plain");
+    if (text == null) return;
+    const lines = text.split(/\r\n|\r|\n/);
+    if (lines.length === 1 && span.startEl === span.endEl) return; // plain single-line paste — let native handle it
+    e.preventDefault();
+    replaceOutlineSelectionRange(lines);
+  });
+
+  // Flush any pending debounced save the instant focus leaves the editable region entirely
+  // (e.g. switching tabs), so a quick edit-then-navigate-away never gets silently dropped.
+  wrap.addEventListener("focusout", flushPendingSaves);
+}
+
+initOutlineEditing();
 initAuth();

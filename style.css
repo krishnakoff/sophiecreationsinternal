@@ -209,7 +209,7 @@ ul.items{ list-style:none; margin:0; padding:0; border-top:1px solid var(--hairl
 .num{ font-family:var(--font-mono); font-size:12.5px; color:var(--muted-2); min-width:20px; padding-top:2px; }
 .checkbox{
   width:18px; height:18px; border:1.5px solid var(--muted-2); border-radius:4px; margin-top:1px;
-  flex-shrink:0; display:flex; align-items:center; justify-content:center; cursor:pointer;
+  flex-shrink:0; display:flex; align-items:center; justify-content:center; cursor:pointer; user-select:none;
 }
 .checkbox.checked{ background:var(--accent); border-color:var(--accent); }
 .checkbox.disabled{ cursor:default; opacity:0.6; }
@@ -238,13 +238,13 @@ ul.items{ list-style:none; margin:0; padding:0; border-top:1px solid var(--hairl
 .outline-heading > .outline-row{ margin:14px 0 4px; }
 .outline-heading > .outline-row .outline-content{ font-weight:600; font-size:14.5px; color:var(--ink); }
 .outline-item > .outline-row .outline-content{ font-size:13.5px; color:var(--ink); line-height:1.5; }
-.outline-marker{ font-family:var(--font-mono); font-size:12.5px; color:var(--muted-2); min-width:16px; flex-shrink:0; padding-top:1px; }
-.outline-content{ flex:1; min-width:0; cursor:text; outline:none; }
-.outline-content[contenteditable="false"]{ cursor:default; }
-.outline-content:focus{ outline:none; }
+.outline-marker{ font-family:var(--font-mono); font-size:12.5px; color:var(--muted-2); min-width:16px; flex-shrink:0; padding-top:1px; user-select:none; }
+.outline-content{ flex:1; min-width:0; cursor:text; }
+.outline-editable{ outline:none; }
+.outline-editable[contenteditable="false"] .outline-content{ cursor:default; }
 .outline-add-btn{
   appearance:none; border:none; background:none; color:var(--muted-2); font-family:inherit;
-  font-size:11.5px; padding:2px 4px 2px 26px; cursor:pointer; opacity:0; transition:opacity .1s;
+  font-size:11.5px; padding:2px 4px 2px 26px; cursor:pointer; opacity:0; transition:opacity .1s; user-select:none;
 }
 .outline-node:hover > .outline-add-btn{ opacity:1; }
 .outline-add-btn:hover{ color:var(--accent); }
