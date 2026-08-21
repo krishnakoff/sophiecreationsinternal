@@ -815,6 +815,23 @@ function isWholeRegionSelected(range, editableEl) {
   }
 }
 
+// Resolves the current selection's `.outline-editable` ancestor directly from the live Selection,
+// without going through getSelectionRowSpan(). That matters specifically for a real Cmd+A: both
+// the browser's native Select All and selectAllInOutlineEditable's own range.selectNodeContents()
+// produce a Range whose start/end containers are the editable element ITSELF (an element node
+// with a child offset), not a text node inside some row — getSelectionRowSpan only knows how to
+// resolve a boundary that's already inside a row, via .closest() walking upward from it, so it
+// returns null for a container-level boundary like this one and silently drops the whole
+// operation. .closest() on the editable element itself still matches immediately, so this always
+// finds the right region regardless of which shape the boundary happens to be.
+function currentEditableRegion() {
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return null;
+  const range = sel.getRangeAt(0);
+  const node = range.startContainer.nodeType === Node.TEXT_NODE ? range.startContainer.parentElement : range.startContainer;
+  return node ? node.closest(".outline-editable") : null;
+}
+
 // Selects everything inside the shared editable region the given row lives in — matching what
 // Cmd+A means in any normal document editor (Notes, Word): select the whole thing, not just one
 // line. Native Cmd+A already does exactly this on its own since the whole outline is one shared
@@ -1282,15 +1299,20 @@ async function outlineEnterKey(el, id) {
 async function outlineBackspaceKey(e, el, id) {
   const sel = window.getSelection();
   if (sel.rangeCount && !sel.isCollapsed) {
+    // Check for a whole-region (real Cmd+A) selection FIRST, straight off the live Selection —
+    // see currentEditableRegion for why getSelectionRowSpan can't be trusted to even recognize
+    // this case, let alone resolve it.
+    const rawRange = sel.getRangeAt(0);
+    const wholeEditableEl = currentEditableRegion();
+    if (wholeEditableEl && isWholeRegionSelected(rawRange, wholeEditableEl)) {
+      e.preventDefault();
+      await replaceEntireOutlineRegion([], wholeEditableEl);
+      return;
+    }
     const span = getSelectionRowSpan();
     if (span && span.startEl !== span.endEl) {
       e.preventDefault();
-      const editableEl = span.startEl.closest(".outline-editable");
-      if (editableEl && isWholeRegionSelected(span.range, editableEl)) {
-        await replaceEntireOutlineRegion([], editableEl);
-      } else {
-        await replaceOutlineSelectionRange([{ depth: 0, text: "", listType: null }], span);
-      }
+      await replaceOutlineSelectionRange([{ depth: 0, text: "", listType: null }], span);
     }
     return;
   }
@@ -1335,15 +1357,17 @@ async function outlineBackspaceKey(e, el, id) {
 function outlineDeleteKey(e) {
   const sel = window.getSelection();
   if (!sel.rangeCount || sel.isCollapsed) return;
+  const rawRange = sel.getRangeAt(0);
+  const wholeEditableEl = currentEditableRegion();
+  if (wholeEditableEl && isWholeRegionSelected(rawRange, wholeEditableEl)) {
+    e.preventDefault();
+    replaceEntireOutlineRegion([], wholeEditableEl);
+    return;
+  }
   const span = getSelectionRowSpan();
   if (!span || span.startEl === span.endEl) return;
   e.preventDefault();
-  const editableEl = span.startEl.closest(".outline-editable");
-  if (editableEl && isWholeRegionSelected(span.range, editableEl)) {
-    replaceEntireOutlineRegion([], editableEl);
-  } else {
-    replaceOutlineSelectionRange([{ depth: 0, text: "", listType: null }], span);
-  }
+  replaceOutlineSelectionRange([{ depth: 0, text: "", listType: null }], span);
 }
 
 function renderOutlineList(nodes, own) {
@@ -1459,6 +1483,20 @@ function initOutlineEditing() {
       if (outlineUndoStack.length) { e.preventDefault(); undoLastOutlineChange(); }
       return;
     }
+    // A non-collapsed selection's Backspace (a row-range delete, or a real Cmd+A whole-region
+    // clear) is handled here directly, before the currentOutlineRow() gate below — that gate
+    // can't resolve a whole-region selection's boundary at all (its Range points at the editable
+    // element itself, not at any row's text; see currentEditableRegion), so falling through to
+    // it first would silently drop this case exactly the way paste almost did. A collapsed caret
+    // still needs `el`/`id` for the merge-with-previous logic, so only a real selection short-
+    // circuits here — outlineBackspaceKey's own selection branch doesn't touch either argument.
+    if (e.key === "Backspace") {
+      const sel = window.getSelection();
+      if (sel.rangeCount && !sel.isCollapsed) {
+        outlineBackspaceKey(e, null, null);
+        return;
+      }
+    }
     const el = currentOutlineRow();
     if (!el) return;
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") {
@@ -1494,8 +1532,8 @@ function initOutlineEditing() {
   wrap.addEventListener("paste", e => {
     if (!isOwnData()) return;
     e.preventDefault();
-    const span = getSelectionRowSpan();
-    if (!span) return;
+    const sel = window.getSelection();
+    if (!sel.rangeCount) return;
     const clipboard = e.clipboardData || window.clipboardData;
     const html = clipboard.getData("text/html");
     const text = clipboard.getData("text/plain");
@@ -1505,16 +1543,25 @@ function initOutlineEditing() {
     // feeds into never inserts raw HTML into the DOM either way, it only ever writes plain text
     // (with **bold** markers) into rows, whether pasting one line or many.
     const parsedLines = parseNestedLinesFromHtml(html) || parseNestedLinesFromPlainText(text || "");
+
     // A selection covering the ENTIRE editable region (a real Cmd+A, not just a drag-selection
     // that happens to span several rows) is a whole-document resync, not an in-place row
     // replace — it needs the full wipe-and-rebuild path, matching headings against the current
-    // tree, rather than the same-parent-run logic replaceOutlineSelectionRange is built for.
-    const editableEl = span.startEl.closest(".outline-editable");
-    if (editableEl && isWholeRegionSelected(span.range, editableEl)) {
-      replaceEntireOutlineRegion(parsedLines, editableEl);
-    } else {
-      replaceOutlineSelectionRange(parsedLines, span);
+    // tree, rather than the same-parent-run logic replaceOutlineSelectionRange is built for. This
+    // has to be checked straight off the live Selection, BEFORE calling getSelectionRowSpan —
+    // see currentEditableRegion for why: a real Cmd+A's Range boundaries point at the editable
+    // element itself (not into any row's text), which getSelectionRowSpan can't resolve at all
+    // and would otherwise just silently bail out on, dropping the paste entirely.
+    const rawRange = sel.getRangeAt(0);
+    const wholeEditableEl = currentEditableRegion();
+    if (wholeEditableEl && isWholeRegionSelected(rawRange, wholeEditableEl)) {
+      replaceEntireOutlineRegion(parsedLines, wholeEditableEl);
+      return;
     }
+
+    const span = getSelectionRowSpan();
+    if (!span) return;
+    replaceOutlineSelectionRange(parsedLines, span);
   });
 
   // Flush any pending debounced save the instant focus leaves the editable region entirely
