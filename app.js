@@ -437,7 +437,15 @@ function parseBold(text) {
 }
 
 function serializeOutlineEditable(el) {
-  let html = el.innerHTML.replace(/<(b|strong)>(.*?)<\/(b|strong)>/gi, "**$2**");
+  // Rich sources (confirmed directly in Apple Notes' own clipboard export) commonly leave a
+  // trailing empty <b></b> right after a real bold span, marking where bold formatting ends —
+  // an artifact of Cocoa's rich text writer, not something the user typed. Left unstripped, the
+  // bold-to-** conversion below turns that into a literal "****" splice right after real bold
+  // text, which is exactly the garbage that showed up after a real paste. Strip empty bold tags
+  // before converting non-empty ones.
+  let html = el.innerHTML
+    .replace(/<(b|strong)>\s*<\/(b|strong)>/gi, "")
+    .replace(/<(b|strong)>(.*?)<\/(b|strong)>/gi, "**$2**");
   const div = document.createElement("div");
   div.innerHTML = html;
   return (div.textContent || "").replace(/ /g, " ").trim();
@@ -791,83 +799,106 @@ function getSelectionRowSpan() {
   return { range, startEl, endEl };
 }
 
-// TEMPORARY diagnostic — every attempt to reconstruct iCloud Notes' actual clipboard HTML from
-// screenshots has turned out subtly wrong once tested against a real paste. Rather than guess
-// again, this shows exactly what the browser received on the last paste (both flavors, raw and
-// unprocessed) in an on-screen panel that's trivial to copy out of, so a fix can be built against
-// the real bytes instead of an inference. Purely additive: doesn't change what actually gets
-// pasted. Remove this once paste fidelity is confirmed against real content.
-function showPasteDebug(html, text) {
-  let panel = document.getElementById("paste-debug-panel");
-  if (!panel) {
-    panel = document.createElement("div");
-    panel.id = "paste-debug-panel";
-    panel.style.cssText = "position:fixed;bottom:0;left:0;right:0;max-height:45vh;overflow:auto;background:#161616;color:#eee;font:12px/1.4 monospace;padding:10px 14px;z-index:9999;border-top:2px solid #666;box-shadow:0 -2px 10px rgba(0,0,0,0.4);";
-    panel.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-        <strong>Paste debug (temporary) — copy both boxes below and send to Claude</strong>
-        <button type="button" id="paste-debug-close" style="cursor:pointer;background:#333;color:#eee;border:1px solid #555;border-radius:4px;padding:4px 10px;">Close</button>
-      </div>
-      <div>text/html:</div>
-      <textarea id="paste-debug-html" style="width:100%;height:140px;background:#0d0d0d;color:#9f9;font:11px monospace;"></textarea>
-      <div style="margin-top:6px;">text/plain:</div>
-      <textarea id="paste-debug-plain" style="width:100%;height:70px;background:#0d0d0d;color:#9cf;font:11px monospace;"></textarea>
-    `;
-    document.body.appendChild(panel);
-    document.getElementById("paste-debug-close").addEventListener("click", () => panel.remove());
+// True when `range` covers the entirety of `editableEl`'s contents (start at or before the very
+// first position, end at or after the very last) — what a native Cmd+A on that region actually
+// produces. Used to tell "select the whole document, like Cmd+A in Notes or Word" apart from an
+// ordinary drag-selection, since the two need completely different paste/delete handling: a
+// same-parent run of rows vs. a full rebuild of the entire list.
+function isWholeRegionSelected(range, editableEl) {
+  const full = document.createRange();
+  full.selectNodeContents(editableEl);
+  try {
+    return range.compareBoundaryPoints(Range.START_TO_START, full) <= 0 &&
+           range.compareBoundaryPoints(Range.END_TO_END, full) >= 0;
+  } catch (err) {
+    return false;
   }
-  document.getElementById("paste-debug-html").value = html || "(empty — this source gave no HTML flavor)";
-  document.getElementById("paste-debug-plain").value = text || "(empty)";
+}
+
+// Selects everything inside the shared editable region the given row lives in — matching what
+// Cmd+A means in any normal document editor (Notes, Word): select the whole thing, not just one
+// line. Native Cmd+A already does exactly this on its own since the whole outline is one shared
+// contenteditable host, so this only needs to reproduce that on the right element and focus it.
+function selectAllInOutlineEditable(el) {
+  const editable = el.closest(".outline-editable");
+  if (!editable) return;
+  editable.focus();
+  const range = document.createRange();
+  range.selectNodeContents(editable);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
 }
 
 // Rich outline sources hand the browser real nested <ol>/<ul><li> markup in the clipboard's HTML
 // flavor — that's the only place the actual structure lives; their plain-text flavor commonly
 // bakes each item's own "1. "/"2. " marker in as literal characters with no indentation at all,
 // so there's nothing for a tab-count heuristic to find. Parses that HTML into a flat {depth,
-// text} list instead. Always parses into a detached container that's never inserted into the
-// page — this reads the markup, it never lets it touch the live DOM. Returns null if the markup
-// doesn't contain any list items at all, so the caller can fall back to plain text.
+// text, listType} list instead. Always parses into a detached container that's never inserted
+// into the page — this reads the markup, it never lets it touch the live DOM. Returns null if the
+// markup doesn't contain any list items at all, so the caller can fall back to plain text.
+//
+// Confirmed directly against Apple Notes' own clipboard export (not guessed): it does NOT nest a
+// sub-list inside the <li> it belongs to (<li>text<ol>...</ol></li>). It puts the nested
+// <ol>/<ul> as a plain SIBLING of the <li> elements, immediately after whichever <li> it belongs
+// to — <li>A</li><ol><li>A's child</li></ol><li>B</li>. Walking only *into* each <li> for a
+// nested list never finds these (they're a sibling, not a descendant), which is exactly why every
+// level past the first was silently dropped before. parseListChildren below walks a list's own
+// children in document order instead, treating a nested <ol>/<ul> as the children of whichever
+// <li> most recently preceded it at that level.
+//
+// Section headings ("MBM", "Operations" — plain, sometimes-bold paragraphs, not list items) carry
+// no indentation info of their own in this export: there is nothing in either clipboard flavor
+// that distinguishes a top-level heading from one meant to sit under another heading. What IS
+// unambiguous is that everything following a heading (any number of separate <ol>/<ul> blocks,
+// blank spacer paragraphs skipped) belongs to it, one level deeper — so each heading becomes its
+// own depth-0 "none" line, and every list line after it gets +1 added to whatever depth
+// parseListChildren already gave it, until the next heading resets that base back to 0.
 function parseNestedLinesFromHtml(html) {
   if (!html) return null;
   const container = document.createElement("div");
   container.innerHTML = html;
   if (!container.querySelector("li")) return null;
 
-  const lines = [];
   function textOf(el) {
     const clone = el.cloneNode(true);
     clone.querySelectorAll("ol, ul").forEach(n => n.remove());
     return serializeOutlineEditable(clone);
   }
-  // listType carries whether THIS li's own list was <ol> (numbered) or <ul> (dashed) so the
-  // pasted rows can match the source's actual marker style rather than guessing at one.
-  function walkLi(li, depth, listType) {
-    const text = textOf(li);
-    if (text.trim()) lines.push({ depth, text, listType });
-    Array.from(li.children).forEach(child => {
-      if (child.tagName === "OL" || child.tagName === "UL") {
+
+  function parseListChildren(listEl, depth, listType) {
+    const out = [];
+    Array.from(listEl.children).forEach(child => {
+      if (child.tagName === "LI") {
+        const text = textOf(child);
+        if (text.trim()) out.push({ depth, text, listType });
+      } else if (child.tagName === "OL" || child.tagName === "UL") {
         const childType = child.tagName === "OL" ? "numbered" : "dashed";
-        Array.from(child.children).forEach(childLi => {
-          if (childLi.tagName === "LI") walkLi(childLi, depth + 1, childType);
-        });
+        out.push(...parseListChildren(child, depth + 1, childType));
       }
     });
+    return out;
   }
-  function walk(node, depth) {
-    Array.from(node.children).forEach(child => {
-      if (child.tagName === "OL" || child.tagName === "UL") {
-        const listType = child.tagName === "OL" ? "numbered" : "dashed";
-        Array.from(child.children).forEach(li => { if (li.tagName === "LI") walkLi(li, depth, listType); });
-      } else if (child.tagName === "LI") {
-        walkLi(child, depth, "dashed");
-      } else {
-        const t = textOf(child);
-        if (t.trim()) lines.push({ depth: 0, text: t, listType: null });
-        walk(child, depth);
+
+  const lines = [];
+  let headingDepthBase = 0;
+  Array.from(container.children).forEach(child => {
+    if (child.tagName === "OL" || child.tagName === "UL") {
+      const listType = child.tagName === "OL" ? "numbered" : "dashed";
+      parseListChildren(child, 0, listType).forEach(line => {
+        lines.push({ depth: line.depth + headingDepthBase, text: line.text, listType: line.listType });
+      });
+    } else {
+      const text = textOf(child);
+      if (text.trim()) {
+        lines.push({ depth: 0, text, listType: "none" });
+        headingDepthBase = 1;
       }
-    });
-  }
-  walk(container, 0);
+      // A blank spacer paragraph (no text — just <br>) leaves headingDepthBase untouched, so
+      // several separate list blocks under the same heading, split only by blank lines, all
+      // still land as that heading's children rather than resetting to top level.
+    }
+  });
   return lines.length ? lines : null;
 }
 
@@ -1032,6 +1063,129 @@ async function replaceOutlineSelectionRange(parsedLines, span) {
   return true;
 }
 
+function nextPositionUnder(parentId) {
+  const siblings = outlineNodes.filter(n => (n.parent_id || null) === (parentId || null));
+  return siblings.length ? Math.max(...siblings.map(n => n.position)) + 1 : 0;
+}
+
+// Whole-document replace: fires when the user Cmd+A's the ENTIRE active list (see
+// isWholeRegionSelected) and pastes over it — the same way Select All + paste replaces a whole
+// document in Notes or Word, used here to resync from an external copy of the list rather than
+// editing individual rows. `parsedLines` may legitimately be empty (a real Cmd+A + Delete/
+// Backspace clearing everything); only a missing array short-circuits.
+//
+// Unlike replaceOutlineSelectionRange (a same-parent run of rows), this wipes every node
+// currently in scope and rebuilds it from parsedLines — "in scope" meaning exactly what this
+// editable region is rendering right now (the active tree, with completed subtrees already
+// pulled out — completed items are a separate contenteditable region entirely, so a Cmd+A here
+// never touches them). Only declines for the completed region itself, which isn't part of this
+// workflow.
+//
+// Section headings (list_style "none") in the new content are matched by exact text against
+// whatever heading of the same name already exists anywhere in the CURRENT tree and inherit that
+// heading's existing parent_id — this is what keeps hand-built hierarchy (e.g. "MBM" nested under
+// "B2B Client") intact across a resync, since Apple Notes' clipboard export carries no signal at
+// all for heading-to-heading nesting (confirmed directly: two heading paragraphs in its HTML are
+// indistinguishable siblings whether one is conceptually "under" the other or not). A heading
+// with no existing match — a genuinely new section — defaults to top-level.
+//
+// Beyond headings, ANY active node (heading or not) whose exact content and list_style matches a
+// line in the new content keeps its own id and gets updated in place rather than deleted and
+// recreated — this is what stops a completed item from being silently orphaned when its parent
+// still exists in the new document but would otherwise have been swapped for a fresh row with a
+// new id. Only a node with no match at all is actually deleted — and even then, if deleting it
+// would leave a completed item's parent_id pointing at a row that no longer exists, the whole
+// operation aborts with nothing changed rather than risk that.
+async function replaceEntireOutlineRegion(parsedLines, editableEl) {
+  if (!parsedLines) return false;
+  if (editableEl.closest(".completed-list")) return false;
+
+  const tree = buildOutlineTree(outlineNodes);
+  (function extractCompleted(nodes) {
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      const n = nodes[i];
+      if (n.list_style !== "none" && n.done) nodes.splice(i, 1);
+      else extractCompleted(n.children);
+    }
+  })(tree);
+  const activeIds = new Set();
+  (function collect(nodes) { nodes.forEach(n => { activeIds.add(n.id); collect(n.children); }); })(tree);
+  const activeNodes = outlineNodes.filter(n => activeIds.has(n.id));
+  const completedNodes = outlineNodes.filter(n => !activeIds.has(n.id));
+
+  const usedLineIdx = new Set();
+  const matchForNode = new Map();
+  activeNodes.forEach(node => {
+    const idx = parsedLines.findIndex((l, i) =>
+      !usedLineIdx.has(i) && l.text.trim() === node.content.trim() && (l.listType || "dashed") === node.list_style
+    );
+    if (idx !== -1) { usedLineIdx.add(idx); matchForNode.set(node.id, idx); }
+  });
+
+  const toDeleteNodes = activeNodes.filter(n => !matchForNode.has(n.id));
+  const toDeleteIds = new Set(toDeleteNodes.map(n => n.id));
+  const wouldOrphan = completedNodes.some(n => n.parent_id && toDeleteIds.has(n.parent_id));
+  if (wouldOrphan) {
+    console.error("replaceEntireOutlineRegion: would orphan a completed item's parent, aborting without changes");
+    return false;
+  }
+
+  const existingHeadingParentByText = new Map();
+  outlineNodes.forEach(n => {
+    if (n.list_style === "none") existingHeadingParentByText.set(n.content.trim(), n.parent_id || null);
+  });
+
+  toDeleteIds.forEach(cancelPendingSave);
+  pushOutlineUndoSnapshot();
+
+  const ops = [];
+  toDeleteNodes.forEach(n => {
+    ops.push(resolveOutlineId(n.id).then(realId => sb.from("todo_outline").delete().eq("id", realId)));
+  });
+  outlineNodes = outlineNodes.filter(n => !toDeleteIds.has(n.id));
+
+  const lineIdxToNodeId = new Map();
+  matchForNode.forEach((idx, nodeId) => lineIdxToNodeId.set(idx, nodeId));
+
+  const stack = [];
+  for (let i = 0; i < parsedLines.length; i++) {
+    const { depth, text, listType } = parsedLines[i];
+    while (stack.length && stack[stack.length - 1].depth >= depth) stack.pop();
+    const parent = stack.length ? stack[stack.length - 1] : null;
+    const matchedNodeId = lineIdxToNodeId.get(i);
+
+    let rowId;
+    if (matchedNodeId) {
+      const node = findOutlineNodeByAnyId(matchedNodeId);
+      const parentId = depth === 0
+        ? (existingHeadingParentByText.has(text.trim()) ? existingHeadingParentByText.get(text.trim()) : (node.parent_id || null))
+        : parent.id;
+      const position = nextPositionUnder(parentId);
+      node.parent_id = parentId;
+      node.position = position;
+      node.list_style = listType || node.list_style;
+      node.content = text;
+      rowId = matchedNodeId;
+      ops.push(resolveOutlineId(rowId).then(realId => sb.from("todo_outline").update({
+        parent_id: parentId, position, list_style: node.list_style, content: text
+      }).eq("id", realId)));
+    } else {
+      const parentId = depth === 0
+        ? (existingHeadingParentByText.has(text.trim()) ? existingHeadingParentByText.get(text.trim()) : null)
+        : parent.id;
+      const position = nextPositionUnder(parentId);
+      const { tempId } = insertOptimisticOutlineNode(parentId, position, listType || "dashed", text);
+      rowId = tempId;
+    }
+    stack.push({ depth, id: rowId });
+  }
+
+  renderTodo();
+  const results = await Promise.all(ops);
+  results.forEach(r => { if (r && r.error) console.error("replaceEntireOutlineRegion:", r.error.message); });
+  return true;
+}
+
 // Swaps a temp id for the real one everywhere it appears in the DOM, without touching the
 // DOM nodes themselves — preserves focus/cursor/selection if the user is still mid-edit there.
 function relabelOutlineNodeId(oldId, newId) {
@@ -1131,7 +1285,12 @@ async function outlineBackspaceKey(e, el, id) {
     const span = getSelectionRowSpan();
     if (span && span.startEl !== span.endEl) {
       e.preventDefault();
-      await replaceOutlineSelectionRange([{ depth: 0, text: "", listType: null }], span);
+      const editableEl = span.startEl.closest(".outline-editable");
+      if (editableEl && isWholeRegionSelected(span.range, editableEl)) {
+        await replaceEntireOutlineRegion([], editableEl);
+      } else {
+        await replaceOutlineSelectionRange([{ depth: 0, text: "", listType: null }], span);
+      }
     }
     return;
   }
@@ -1179,7 +1338,12 @@ function outlineDeleteKey(e) {
   const span = getSelectionRowSpan();
   if (!span || span.startEl === span.endEl) return;
   e.preventDefault();
-  replaceOutlineSelectionRange([{ depth: 0, text: "", listType: null }], span);
+  const editableEl = span.startEl.closest(".outline-editable");
+  if (editableEl && isWholeRegionSelected(span.range, editableEl)) {
+    replaceEntireOutlineRegion([], editableEl);
+  } else {
+    replaceOutlineSelectionRange([{ depth: 0, text: "", listType: null }], span);
+  }
 }
 
 function renderOutlineList(nodes, own) {
@@ -1298,11 +1462,12 @@ function initOutlineEditing() {
     const el = currentOutlineRow();
     if (!el) return;
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") {
-      // Native Select All would grab the entire shared editable region (every row in the whole
-      // list, not just this one) since the outline is one contenteditable host — scope it to
-      // the current row instead, matching what "select all" means in an ordinary text field.
+      // Matches Cmd+A in any normal document editor (Notes, Word): select everything in the
+      // whole list, not just the current line — this is also what makes "select all, then paste
+      // a freshly-copied version of the whole list over it" work at all; a selection that only
+      // covers one row can never be replaced with a multi-section document.
       e.preventDefault();
-      selectAllInOutlineNode(el.dataset.id);
+      selectAllInOutlineEditable(el);
       return;
     }
     if (e.key === "Enter") { e.preventDefault(); outlineEnterKey(el, el.dataset.id); }
@@ -1335,13 +1500,21 @@ function initOutlineEditing() {
     const html = clipboard.getData("text/html");
     const text = clipboard.getData("text/plain");
     if (text == null && !html) return;
-    showPasteDebug(html, text); // TEMPORARY — see showPasteDebug definition, remove once paste fidelity is confirmed fixed
     // Try the HTML flavor's real list structure first (falling back to plain text, tab-depth
     // heuristic and all, only when there's no usable list markup) — the reconciliation this
     // feeds into never inserts raw HTML into the DOM either way, it only ever writes plain text
     // (with **bold** markers) into rows, whether pasting one line or many.
     const parsedLines = parseNestedLinesFromHtml(html) || parseNestedLinesFromPlainText(text || "");
-    replaceOutlineSelectionRange(parsedLines, span);
+    // A selection covering the ENTIRE editable region (a real Cmd+A, not just a drag-selection
+    // that happens to span several rows) is a whole-document resync, not an in-place row
+    // replace — it needs the full wipe-and-rebuild path, matching headings against the current
+    // tree, rather than the same-parent-run logic replaceOutlineSelectionRange is built for.
+    const editableEl = span.startEl.closest(".outline-editable");
+    if (editableEl && isWholeRegionSelected(span.range, editableEl)) {
+      replaceEntireOutlineRegion(parsedLines, editableEl);
+    } else {
+      replaceOutlineSelectionRange(parsedLines, span);
+    }
   });
 
   // Flush any pending debounced save the instant focus leaves the editable region entirely
