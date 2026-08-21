@@ -699,11 +699,14 @@ function currentOutlineRow() {
 }
 
 // Resolves the current selection down to the .outline-content rows its start and end fall in,
-// so a drag-selection spanning multiple rows can be reasoned about as a row range.
+// so a drag-selection spanning multiple rows can be reasoned about as a row range. Clones the
+// range immediately rather than handing back the live Selection's own Range object — anything
+// downstream that mutates the DOM (e.g. building the before/after clones below) has no business
+// being able to shift boundary points out from under a range someone else is still holding.
 function getSelectionRowSpan() {
   const sel = window.getSelection();
   if (!sel.rangeCount) return null;
-  const range = sel.getRangeAt(0);
+  const range = sel.getRangeAt(0).cloneRange();
   let startNode = range.startContainer.nodeType === Node.TEXT_NODE ? range.startContainer.parentElement : range.startContainer;
   let endNode = range.endContainer.nodeType === Node.TEXT_NODE ? range.endContainer.parentElement : range.endContainer;
   const startEl = startNode && startNode.closest(".outline-content");
@@ -712,14 +715,18 @@ function getSelectionRowSpan() {
   return { range, startEl, endEl };
 }
 
-// Replaces whatever the current selection spans — a run of whole rows, or just part of one row
-// — with `lines` (one string per resulting row). Used for pasting a multi-line block over a
-// drag-selection, and for Backspace/Delete when a selection spans more than one row. Declines
-// (returns false, changes nothing) for selections that cross into a different nesting level, or
-// that touch a row with children — those are rare/structurally risky cases, left to whatever the
-// browser does natively rather than risking a bad reconciliation.
-async function replaceOutlineSelectionRange(lines) {
-  const span = getSelectionRowSpan();
+// Replaces whatever `span` covers — a run of whole rows, or just part of one row — with `lines`
+// (one string per resulting row). Used for pasting a multi-line block over a drag-selection, and
+// for Backspace/Delete when a selection spans more than one row. Takes `span` from the caller
+// rather than re-deriving it from the live selection — by the time this runs, whatever prompted
+// it (preventDefault, other synchronous work) has already happened, so re-querying the selection
+// here would be reasoning about browser state that's no longer guaranteed to match what the
+// caller actually saw. Declines (returns false, changes nothing) for selections that cross into a
+// different nesting level, that touch a row with children, or where the computed prefix/suffix
+// come out longer than the rows they supposedly came from — the last one is a sanity backstop, not
+// a case that's expected to legitimately trigger, but a Range that's ended up somewhere it
+// shouldn't should never be trusted with rewriting rows.
+async function replaceOutlineSelectionRange(lines, span) {
   if (!span) return false;
   const { range, startEl, endEl } = span;
 
@@ -753,6 +760,16 @@ async function replaceOutlineSelectionRange(lines) {
   const afterDiv = document.createElement("div");
   afterDiv.appendChild(afterRange.cloneContents());
   const suffix = serializeOutlineEditable(afterDiv);
+
+  // prefix can never be longer than startNode's own original content (it's defined as "the part
+  // of startNode's content before the selection"), same for suffix against endNode — if either
+  // comes out longer, the Range boundary ended up somewhere outside the row it was supposed to
+  // be scoped to, and trusting it would risk splicing in unrelated content from elsewhere in the
+  // tree. Bail out rather than write anything in that case.
+  if (prefix.length > startNode.content.length || suffix.length > endNode.content.length) {
+    console.error("replaceOutlineSelectionRange: prefix/suffix exceeded source row length, aborting");
+    return false;
+  }
 
   const newLines = lines.length ? lines.slice() : [""];
   newLines[0] = prefix + newLines[0];
@@ -886,7 +903,7 @@ async function outlineBackspaceKey(e, el, id) {
     const span = getSelectionRowSpan();
     if (span && span.startEl !== span.endEl) {
       e.preventDefault();
-      await replaceOutlineSelectionRange([""]);
+      await replaceOutlineSelectionRange([""], span);
     }
     return;
   }
@@ -933,7 +950,7 @@ function outlineDeleteKey(e) {
   const span = getSelectionRowSpan();
   if (!span || span.startEl === span.endEl) return;
   e.preventDefault();
-  replaceOutlineSelectionRange([""]);
+  replaceOutlineSelectionRange([""], span);
 }
 
 function renderOutlineList(nodes, own) {
@@ -1066,7 +1083,7 @@ function initOutlineEditing() {
     const lines = text.split(/\r\n|\r|\n/);
     if (lines.length === 1 && span.startEl === span.endEl) return; // plain single-line paste — let native handle it
     e.preventDefault();
-    replaceOutlineSelectionRange(lines);
+    replaceOutlineSelectionRange(lines, span);
   });
 
   // Flush any pending debounced save the instant focus leaves the editable region entirely
