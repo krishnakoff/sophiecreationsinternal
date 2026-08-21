@@ -106,14 +106,19 @@ function renderOwnerSwitch() {
 }
 
 // ---------- nav ----------
+// Remembers the last open tab in localStorage so a refresh lands back where you were, instead of
+// always resetting to the CRM tab (which is only the default for a brand new, never-visited session).
+const LAST_TAB_KEY = "sophie_last_tab";
+function switchTab(target) {
+  document.querySelectorAll("nav.tabs button").forEach(b => b.classList.toggle("active", b.dataset.target === target));
+  document.querySelectorAll(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + target));
+  localStorage.setItem(LAST_TAB_KEY, target);
+}
 document.querySelectorAll("nav.tabs button").forEach(btn => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll("nav.tabs button").forEach(b => b.classList.remove("active"));
-    document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
-    btn.classList.add("active");
-    document.getElementById("view-" + btn.dataset.target).classList.add("active");
-  });
+  btn.addEventListener("click", () => switchTab(btn.dataset.target));
 });
+const lastTab = localStorage.getItem(LAST_TAB_KEY);
+if (lastTab && document.getElementById("view-" + lastTab)) switchTab(lastTab);
 
 // ---------- data + realtime ----------
 async function loadAll() {
@@ -635,7 +640,23 @@ async function toggleOutlineDone(id, done) {
   if (error) console.error("toggleOutlineDone:", error.message);
 }
 
+// A row's own content should only ever hold plain text plus inline <strong> spans (from
+// **bold**) or a lone placeholder <br> — that's all our own rendering and editing code ever
+// produces. Block-level markup (ol/ul/li/div/p/table) has no business being in there; its
+// presence means rich HTML got into the DOM some other way (e.g. a native paste that wasn't
+// actually intercepted) rather than through any controlled path. Flattening a whole foreign
+// subtree like that into one string is exactly how a good-looking paste turns into a mangled
+// blob after the next reload — so decline the save outright rather than risk it, even though
+// the paste handler below is now supposed to make this unreachable.
+function hasUnexpectedBlockMarkup(el) {
+  return !!el.querySelector("ol, ul, li, div, p, table, tr, td, h1, h2, h3, h4, h5, h6");
+}
+
 async function saveOutlineContent(id, el) {
+  if (hasUnexpectedBlockMarkup(el)) {
+    console.error("saveOutlineContent: unexpected block-level markup in row, declining to save", el.innerHTML.slice(0, 200));
+    return;
+  }
   const content = serializeOutlineEditable(el);
   const node = findOutlineNodeByAnyId(id);
   if (node) node.content = content;
@@ -1074,15 +1095,36 @@ function initOutlineEditing() {
     scheduleOutlineSave(el.dataset.id, el);
   });
 
+  // Rich clipboard sources (iCloud Notes, Word, etc.) carry real nested <ol>/<li>/<div>
+  // structure in their HTML flavor, but their plain-text flavor doesn't always mark line breaks
+  // the same way — some encode a whole list with no \n between items at all. Deciding whether to
+  // intercept a paste based on the plain text's line count let that HTML slip through natively
+  // on exactly those sources: it renders looking perfectly fine (it's genuine rich markup being
+  // shown as-is), but the very next content save flattens that whole foreign subtree into one
+  // string, which is how a good paste turns into a mangled all-bold blob after a reload. So:
+  // ALWAYS take control of paste here, unconditionally, and never let the browser's own paste
+  // insertion touch the DOM at all — only ever insert the plain-text flavor, ourselves.
   wrap.addEventListener("paste", e => {
     if (!isOwnData()) return;
+    e.preventDefault();
     const span = getSelectionRowSpan();
     if (!span) return;
     const text = (e.clipboardData || window.clipboardData).getData("text/plain");
     if (text == null) return;
     const lines = text.split(/\r\n|\r|\n/);
-    if (lines.length === 1 && span.startEl === span.endEl) return; // plain single-line paste — let native handle it
-    e.preventDefault();
+    if (lines.length === 1 && span.startEl === span.endEl) {
+      // Single line into a single row: insert the plain text ourselves rather than falling back
+      // to native paste, so rich HTML on the clipboard still never reaches the DOM.
+      const range = span.range;
+      range.deleteContents();
+      range.insertNode(document.createTextNode(text));
+      range.collapse(false);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      scheduleOutlineSave(span.startEl.dataset.id, span.startEl);
+      return;
+    }
     replaceOutlineSelectionRange(lines, span);
   });
 
