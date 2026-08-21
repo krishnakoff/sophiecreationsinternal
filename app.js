@@ -712,9 +712,16 @@ async function undoLastOutlineChange() {
   if (!snapshot) return;
   const currentById = new Map(outlineNodes.map(n => [n.id, n]));
   const snapshotById = new Map(snapshot.map(n => [n.id, n]));
-  const isReal = id => !id.startsWith("temp-"); // a still-pending insert has no db row to touch
+  const isReal = id => !id.startsWith("temp-");
 
-  const toDelete = outlineNodes.filter(n => isReal(n.id) && !snapshotById.has(n.id));
+  // A row created by the very operation being undone may still be temp- at this point (its
+  // insert hasn't resolved yet) — that in-flight insert was never cancelled, so it's still going
+  // to land in the database regardless of what happens to local state here. Skipping it (instead
+  // of waiting for it to resolve and then deleting the real row) would leave it to write itself
+  // in as an orphan no one's tracking anymore, the exact way undo could silently leave a ghost
+  // duplicate behind. toInsert/toUpdate only ever touch rows that already existed before the
+  // operation being undone, which by definition already had real ids — no such race there.
+  const toDelete = outlineNodes.filter(n => !snapshotById.has(n.id));
   const toInsert = snapshot.filter(n => isReal(n.id) && !currentById.has(n.id));
   const toUpdate = snapshot.filter(n => {
     const cur = currentById.get(n.id);
@@ -728,7 +735,7 @@ async function undoLastOutlineChange() {
   renderTodo();
 
   const ops = [];
-  toDelete.forEach(n => ops.push(sb.from("todo_outline").delete().eq("id", n.id)));
+  toDelete.forEach(n => ops.push(resolveOutlineId(n.id).then(realId => sb.from("todo_outline").delete().eq("id", realId))));
   toInsert.forEach(n => ops.push(sb.from("todo_outline").insert({
     id: n.id, owner_id: n.owner_id, parent_id: n.parent_id, position: n.position,
     list_style: n.list_style, content: n.content, done: n.done
@@ -784,18 +791,82 @@ function getSelectionRowSpan() {
   return { range, startEl, endEl };
 }
 
-// Replaces whatever `span` covers — a run of whole rows, or just part of one row — with `lines`
-// (one string per resulting row). Used for pasting a multi-line block over a drag-selection, and
-// for Backspace/Delete when a selection spans more than one row. Takes `span` from the caller
-// rather than re-deriving it from the live selection — by the time this runs, whatever prompted
-// it (preventDefault, other synchronous work) has already happened, so re-querying the selection
+// Rich outline sources hand the browser real nested <ol>/<ul><li> markup in the clipboard's HTML
+// flavor — that's the only place the actual structure lives; their plain-text flavor commonly
+// bakes each item's own "1. "/"2. " marker in as literal characters with no indentation at all,
+// so there's nothing for a tab-count heuristic to find. Parses that HTML into a flat {depth,
+// text} list instead. Always parses into a detached container that's never inserted into the
+// page — this reads the markup, it never lets it touch the live DOM. Returns null if the markup
+// doesn't contain any list items at all, so the caller can fall back to plain text.
+function parseNestedLinesFromHtml(html) {
+  if (!html) return null;
+  const container = document.createElement("div");
+  container.innerHTML = html;
+  if (!container.querySelector("li")) return null;
+
+  const lines = [];
+  function textOf(el) {
+    const clone = el.cloneNode(true);
+    clone.querySelectorAll("ol, ul").forEach(n => n.remove());
+    return serializeOutlineEditable(clone);
+  }
+  // listType carries whether THIS li's own list was <ol> (numbered) or <ul> (dashed) so the
+  // pasted rows can match the source's actual marker style rather than guessing at one.
+  function walkLi(li, depth, listType) {
+    const text = textOf(li);
+    if (text.trim()) lines.push({ depth, text, listType });
+    Array.from(li.children).forEach(child => {
+      if (child.tagName === "OL" || child.tagName === "UL") {
+        const childType = child.tagName === "OL" ? "numbered" : "dashed";
+        Array.from(child.children).forEach(childLi => {
+          if (childLi.tagName === "LI") walkLi(childLi, depth + 1, childType);
+        });
+      }
+    });
+  }
+  function walk(node, depth) {
+    Array.from(node.children).forEach(child => {
+      if (child.tagName === "OL" || child.tagName === "UL") {
+        const listType = child.tagName === "OL" ? "numbered" : "dashed";
+        Array.from(child.children).forEach(li => { if (li.tagName === "LI") walkLi(li, depth, listType); });
+      } else if (child.tagName === "LI") {
+        walkLi(child, depth, "dashed");
+      } else {
+        const t = textOf(child);
+        if (t.trim()) lines.push({ depth: 0, text: t, listType: null });
+        walk(child, depth);
+      }
+    });
+  }
+  walk(container, 0);
+  return lines.length ? lines : null;
+}
+
+// Falls back to the clipboard's plain-text flavor when there's no usable HTML list structure —
+// still tries a leading-tab-per-level heuristic for sources that do encode depth that way in
+// plain text, but most of the time (a plain multi-line paste with no real hierarchy) this just
+// produces everything at depth 0, which is the correct, honest answer for genuinely flat text.
+function parseNestedLinesFromPlainText(text) {
+  const lines = text.split(/\r\n|\r|\n/);
+  return lines.map(line => {
+    const m = line.match(/^\t*/);
+    return { depth: m[0].length, text: line.slice(m[0].length), listType: null };
+  });
+}
+
+// Replaces whatever `span` covers — a run of whole rows, or just part of one row — with
+// `parsedLines` (an array of {depth, text}, depth relative to startNode's own level, one entry
+// per resulting row). Used for pasting a multi-line block over a drag-selection, and for
+// Backspace/Delete when a selection spans more than one row. Takes `span` from the caller rather
+// than re-deriving it from the live selection — by the time this runs, whatever prompted it
+// (preventDefault, other synchronous work) has already happened, so re-querying the selection
 // here would be reasoning about browser state that's no longer guaranteed to match what the
 // caller actually saw. Declines (returns false, changes nothing) for selections that cross into a
 // different nesting level, that touch a row with children, or where the computed prefix/suffix
 // come out longer than the rows they supposedly came from — the last one is a sanity backstop, not
 // a case that's expected to legitimately trigger, but a Range that's ended up somewhere it
 // shouldn't should never be trusted with rewriting rows.
-async function replaceOutlineSelectionRange(lines, span) {
+async function replaceOutlineSelectionRange(parsedLines, span) {
   if (!span) return false;
   const { range, startEl, endEl } = span;
 
@@ -853,24 +924,26 @@ async function replaceOutlineSelectionRange(lines, span) {
     return false;
   }
 
-  // Rich outline sources (iCloud Notes among them) encode each pasted line's nesting depth as
-  // a run of leading tab characters in the plain-text clipboard flavor — one tab per indent
-  // level. Parsing that back out lets a pasted block rebuild as a real nested tree instead of
-  // flattening into siblings. The first line always continues at startNode's own level (there's
-  // nothing sensible for it to nest under), regardless of any leading tabs it happens to carry.
-  const parsedLines = lines.length
-    ? lines.map(line => { const m = line.match(/^\t*/); return { depth: m[0].length, text: line.slice(m[0].length) }; })
-    : [{ depth: 0, text: "" }];
-  parsedLines[0].depth = 0;
-  parsedLines[0].text = prefix + parsedLines[0].text;
-  parsedLines[parsedLines.length - 1].text = parsedLines[parsedLines.length - 1].text + suffix;
+  // The first parsed line always continues at startNode's own level (there's nothing sensible
+  // for it to nest under, whatever depth it nominally carries), and gets whatever unselected
+  // text preceded the selection within startNode prepended to it; the last gets whatever
+  // unselected text followed the selection within endNode appended.
+  const resultLines = (parsedLines.length ? parsedLines.map(l => ({ ...l })) : [{ depth: 0, text: "" }]);
+  resultLines[0].depth = 0;
+  resultLines[0].text = prefix + resultLines[0].text;
+  resultLines[resultLines.length - 1].text = resultLines[resultLines.length - 1].text + suffix;
 
   const deleteIds = rowsInRange.slice(1).map(n => n.id);
   cancelPendingSave(startId);
   deleteIds.forEach(cancelPendingSave);
 
   pushOutlineUndoSnapshot();
-  startNode.content = parsedLines[0].text;
+  startNode.content = resultLines[0].text;
+  // startNode itself is reused as the first resulting row rather than recreated, so its own
+  // list_style needs the same source-matching treatment every other depth-0 line gets — otherwise
+  // it would silently keep whatever style it happened to have before the paste (most commonly
+  // "dashed", the fallback new empty rows get) even when the pasted content is clearly numbered.
+  if (resultLines[0].listType) startNode.list_style = resultLines[0].listType;
   outlineNodes = outlineNodes.filter(n => !deleteIds.includes(n.id));
 
   const remainingSiblings = outlineNodes
@@ -880,20 +953,21 @@ async function replaceOutlineSelectionRange(lines, span) {
   const nextSibling = remainingSiblings[afterIdx + 1];
   const basePos = startNode.position;
   const endPos = nextSibling ? nextSibling.position : basePos + 1;
-  const topLevelCount = parsedLines.filter(l => l.depth === 0).length;
+  const topLevelCount = resultLines.filter(l => l.depth === 0).length;
 
   // Walk the parsed lines with a stack of "most recently created row at each depth" — each new
   // line nests under whichever shallower row most recently preceded it, a direct translation of
-  // the tab indentation into parent/child relationships. Top-level continuations (depth 0) are
-  // spaced fractionally into the gap after startNode, same as the flat case always was; anything
-  // deeper is a brand-new subtree with no pre-existing siblings to conflict with, so it just
-  // counts up from 0. New nested rows use "dashed", matching how sub-item detail lines are
-  // styled everywhere else in this outline.
+  // the source's own list nesting into parent/child relationships. Top-level continuations
+  // (depth 0) are spaced fractionally into the gap after startNode, same as the flat case always
+  // was; anything deeper is a brand-new subtree with no pre-existing siblings to conflict with,
+  // so it just counts up from 0. Each row's list_style matches whichever kind of list (<ol> vs
+  // <ul>) it actually came from in the source when that's known; falling back to startNode's own
+  // style for depth 0, or "dashed" for anything deeper, only when it isn't.
   const stack = [{ depth: 0, id: startId }];
   let topSeen = 0;
   let lastRowId = startId;
-  for (let i = 1; i < parsedLines.length; i++) {
-    const { depth, text } = parsedLines[i];
+  for (let i = 1; i < resultLines.length; i++) {
+    const { depth, text, listType } = resultLines[i];
     while (stack.length > 1 && stack[stack.length - 1].depth >= depth) stack.pop();
     const parent = stack[stack.length - 1];
     let parentId, position, listStyle;
@@ -901,11 +975,11 @@ async function replaceOutlineSelectionRange(lines, span) {
       topSeen++;
       parentId = startNode.parent_id;
       position = basePos + (endPos - basePos) * (topSeen / topLevelCount);
-      listStyle = startNode.list_style;
+      listStyle = listType || startNode.list_style;
     } else {
       parentId = parent.id;
       position = outlineNodes.filter(n => n.parent_id === parentId).length;
-      listStyle = "dashed";
+      listStyle = listType || "dashed";
     }
     const { tempId } = insertOptimisticOutlineNode(parentId, position, listStyle, text);
     stack.push({ depth, id: tempId });
@@ -914,11 +988,11 @@ async function replaceOutlineSelectionRange(lines, span) {
 
   renderTodo();
 
-  const lastLine = parsedLines[parsedLines.length - 1].text;
+  const lastLine = resultLines[resultLines.length - 1].text;
   focusOutlineNode(lastRowId, Math.max(0, lastLine.length - suffix.length));
 
   const realStartId = await resolveOutlineId(startId);
-  const ops = [sb.from("todo_outline").update({ content: startNode.content }).eq("id", realStartId)];
+  const ops = [sb.from("todo_outline").update({ content: startNode.content, list_style: startNode.list_style }).eq("id", realStartId)];
   for (const delId of deleteIds) {
     const realDelId = await resolveOutlineId(delId);
     ops.push(sb.from("todo_outline").delete().eq("id", realDelId));
@@ -1028,7 +1102,7 @@ async function outlineBackspaceKey(e, el, id) {
     const span = getSelectionRowSpan();
     if (span && span.startEl !== span.endEl) {
       e.preventDefault();
-      await replaceOutlineSelectionRange([""], span);
+      await replaceOutlineSelectionRange([{ depth: 0, text: "", listType: null }], span);
     }
     return;
   }
@@ -1076,7 +1150,7 @@ function outlineDeleteKey(e) {
   const span = getSelectionRowSpan();
   if (!span || span.startEl === span.endEl) return;
   e.preventDefault();
-  replaceOutlineSelectionRange([""], span);
+  replaceOutlineSelectionRange([{ depth: 0, text: "", listType: null }], span);
 }
 
 function renderOutlineList(nodes, own) {
@@ -1228,23 +1302,16 @@ function initOutlineEditing() {
     e.preventDefault();
     const span = getSelectionRowSpan();
     if (!span) return;
-    const text = (e.clipboardData || window.clipboardData).getData("text/plain");
-    if (text == null) return;
-    const lines = text.split(/\r\n|\r|\n/);
-    if (lines.length === 1 && span.startEl === span.endEl) {
-      // Single line into a single row: insert the plain text ourselves rather than falling back
-      // to native paste, so rich HTML on the clipboard still never reaches the DOM.
-      const range = span.range;
-      range.deleteContents();
-      range.insertNode(document.createTextNode(text));
-      range.collapse(false);
-      const sel = window.getSelection();
-      sel.removeAllRanges();
-      sel.addRange(range);
-      scheduleOutlineSave(span.startEl.dataset.id, span.startEl);
-      return;
-    }
-    replaceOutlineSelectionRange(lines, span);
+    const clipboard = e.clipboardData || window.clipboardData;
+    const html = clipboard.getData("text/html");
+    const text = clipboard.getData("text/plain");
+    if (text == null && !html) return;
+    // Try the HTML flavor's real list structure first (falling back to plain text, tab-depth
+    // heuristic and all, only when there's no usable list markup) — the reconciliation this
+    // feeds into never inserts raw HTML into the DOM either way, it only ever writes plain text
+    // (with **bold** markers) into rows, whether pasting one line or many.
+    const parsedLines = parseNestedLinesFromHtml(html) || parseNestedLinesFromPlainText(text || "");
+    replaceOutlineSelectionRange(parsedLines, span);
   });
 
   // Flush any pending debounced save the instant focus leaves the editable region entirely
