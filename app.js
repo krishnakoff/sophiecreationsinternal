@@ -791,6 +791,35 @@ function getSelectionRowSpan() {
   return { range, startEl, endEl };
 }
 
+// TEMPORARY diagnostic — every attempt to reconstruct iCloud Notes' actual clipboard HTML from
+// screenshots has turned out subtly wrong once tested against a real paste. Rather than guess
+// again, this shows exactly what the browser received on the last paste (both flavors, raw and
+// unprocessed) in an on-screen panel that's trivial to copy out of, so a fix can be built against
+// the real bytes instead of an inference. Purely additive: doesn't change what actually gets
+// pasted. Remove this once paste fidelity is confirmed against real content.
+function showPasteDebug(html, text) {
+  let panel = document.getElementById("paste-debug-panel");
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.id = "paste-debug-panel";
+    panel.style.cssText = "position:fixed;bottom:0;left:0;right:0;max-height:45vh;overflow:auto;background:#161616;color:#eee;font:12px/1.4 monospace;padding:10px 14px;z-index:9999;border-top:2px solid #666;box-shadow:0 -2px 10px rgba(0,0,0,0.4);";
+    panel.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <strong>Paste debug (temporary) — copy both boxes below and send to Claude</strong>
+        <button type="button" id="paste-debug-close" style="cursor:pointer;background:#333;color:#eee;border:1px solid #555;border-radius:4px;padding:4px 10px;">Close</button>
+      </div>
+      <div>text/html:</div>
+      <textarea id="paste-debug-html" style="width:100%;height:140px;background:#0d0d0d;color:#9f9;font:11px monospace;"></textarea>
+      <div style="margin-top:6px;">text/plain:</div>
+      <textarea id="paste-debug-plain" style="width:100%;height:70px;background:#0d0d0d;color:#9cf;font:11px monospace;"></textarea>
+    `;
+    document.body.appendChild(panel);
+    document.getElementById("paste-debug-close").addEventListener("click", () => panel.remove());
+  }
+  document.getElementById("paste-debug-html").value = html || "(empty — this source gave no HTML flavor)";
+  document.getElementById("paste-debug-plain").value = text || "(empty)";
+}
+
 // Rich outline sources hand the browser real nested <ol>/<ul><li> markup in the clipboard's HTML
 // flavor — that's the only place the actual structure lives; their plain-text flavor commonly
 // bakes each item's own "1. "/"2. " marker in as literal characters with no indentation at all,
@@ -1306,6 +1335,7 @@ function initOutlineEditing() {
     const html = clipboard.getData("text/html");
     const text = clipboard.getData("text/plain");
     if (text == null && !html) return;
+    showPasteDebug(html, text); // TEMPORARY — see showPasteDebug definition, remove once paste fidelity is confirmed fixed
     // Try the HTML flavor's real list structure first (falling back to plain text, tab-depth
     // heuristic and all, only when there's no usable list markup) — the reconciliation this
     // feeds into never inserts raw HTML into the DOM either way, it only ever writes plain text
