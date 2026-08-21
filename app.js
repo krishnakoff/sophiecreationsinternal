@@ -692,6 +692,54 @@ function flushPendingSaves() {
   });
 }
 
+// Lightweight undo for the structural outline operations that bypass the browser's native undo
+// entirely — Enter-split, Backspace-merge, and paste/Backspace/Delete over a multi-row selection
+// all call preventDefault() and do their own DOM/data manipulation, so there's nothing in the
+// browser's own undo history for Cmd+Z to revert. Plain typing is untouched by this: ordinary
+// character input is never intercepted, so native undo already handles it on its own.
+// Each entry is a full snapshot of outlineNodes taken right before one of those operations
+// mutates anything; undoing restores it and reconciles the database against whatever the diff
+// between "now" and "the snapshot" actually is (some rows re-inserted, some deleted, some just
+// updated) rather than needing separate undo logic per operation type.
+const outlineUndoStack = [];
+const MAX_OUTLINE_UNDO = 20;
+function pushOutlineUndoSnapshot() {
+  outlineUndoStack.push(outlineNodes.map(n => ({ ...n })));
+  if (outlineUndoStack.length > MAX_OUTLINE_UNDO) outlineUndoStack.shift();
+}
+async function undoLastOutlineChange() {
+  const snapshot = outlineUndoStack.pop();
+  if (!snapshot) return;
+  const currentById = new Map(outlineNodes.map(n => [n.id, n]));
+  const snapshotById = new Map(snapshot.map(n => [n.id, n]));
+  const isReal = id => !id.startsWith("temp-"); // a still-pending insert has no db row to touch
+
+  const toDelete = outlineNodes.filter(n => isReal(n.id) && !snapshotById.has(n.id));
+  const toInsert = snapshot.filter(n => isReal(n.id) && !currentById.has(n.id));
+  const toUpdate = snapshot.filter(n => {
+    const cur = currentById.get(n.id);
+    return cur && isReal(n.id) && (
+      cur.content !== n.content || cur.done !== n.done || cur.position !== n.position ||
+      cur.parent_id !== n.parent_id || cur.list_style !== n.list_style
+    );
+  });
+
+  outlineNodes = snapshot.map(n => ({ ...n }));
+  renderTodo();
+
+  const ops = [];
+  toDelete.forEach(n => ops.push(sb.from("todo_outline").delete().eq("id", n.id)));
+  toInsert.forEach(n => ops.push(sb.from("todo_outline").insert({
+    id: n.id, owner_id: n.owner_id, parent_id: n.parent_id, position: n.position,
+    list_style: n.list_style, content: n.content, done: n.done
+  })));
+  toUpdate.forEach(n => ops.push(sb.from("todo_outline").update({
+    content: n.content, done: n.done, position: n.position, parent_id: n.parent_id, list_style: n.list_style
+  }).eq("id", n.id)));
+  const results = await Promise.all(ops);
+  results.forEach(r => { if (r && r.error) console.error("undoLastOutlineChange:", r.error.message); });
+}
+
 // Focuses the shared editable ancestor (not the row itself — rows aren't separately focusable)
 // then places the caret/selection inside the given row.
 function focusOutlineAncestorOf(el) {
@@ -768,6 +816,19 @@ async function replaceOutlineSelectionRange(lines, span) {
   const rowsInRange = siblings.slice(startIdx, endIdx + 1);
   if (rowsInRange.some(n => outlineNodes.some(c => c.parent_id === n.id))) return false;
 
+  // startEl/endEl were derived from range.startContainer/endContainer via .closest(), so by
+  // construction the boundary points should always be inside them — but that reasoning has
+  // burned us before (a stale clone, a re-render landing at the wrong moment, anything that
+  // leaves the Range referencing something it shouldn't by the time we get here). Rather than
+  // trust that invariant implicitly, check it explicitly: if either boundary point isn't
+  // actually contained in the row it's supposed to describe, refuse to build any Range from it
+  // at all. This is what actually prevents a boundary that's ended up elsewhere from producing a
+  // Range that spans out into unrelated content — checking the input, not just the output.
+  if (!startEl.contains(range.startContainer) || !endEl.contains(range.endContainer)) {
+    console.error("replaceOutlineSelectionRange: selection boundary not contained in its row, aborting");
+    return false;
+  }
+
   const beforeRange = document.createRange();
   beforeRange.selectNodeContents(startEl);
   beforeRange.setEnd(range.startContainer, range.startOffset);
@@ -792,15 +853,24 @@ async function replaceOutlineSelectionRange(lines, span) {
     return false;
   }
 
-  const newLines = lines.length ? lines.slice() : [""];
-  newLines[0] = prefix + newLines[0];
-  newLines[newLines.length - 1] = newLines[newLines.length - 1] + suffix;
+  // Rich outline sources (iCloud Notes among them) encode each pasted line's nesting depth as
+  // a run of leading tab characters in the plain-text clipboard flavor — one tab per indent
+  // level. Parsing that back out lets a pasted block rebuild as a real nested tree instead of
+  // flattening into siblings. The first line always continues at startNode's own level (there's
+  // nothing sensible for it to nest under), regardless of any leading tabs it happens to carry.
+  const parsedLines = lines.length
+    ? lines.map(line => { const m = line.match(/^\t*/); return { depth: m[0].length, text: line.slice(m[0].length) }; })
+    : [{ depth: 0, text: "" }];
+  parsedLines[0].depth = 0;
+  parsedLines[0].text = prefix + parsedLines[0].text;
+  parsedLines[parsedLines.length - 1].text = parsedLines[parsedLines.length - 1].text + suffix;
 
   const deleteIds = rowsInRange.slice(1).map(n => n.id);
   cancelPendingSave(startId);
   deleteIds.forEach(cancelPendingSave);
 
-  startNode.content = newLines[0];
+  pushOutlineUndoSnapshot();
+  startNode.content = parsedLines[0].text;
   outlineNodes = outlineNodes.filter(n => !deleteIds.includes(n.id));
 
   const remainingSiblings = outlineNodes
@@ -810,17 +880,41 @@ async function replaceOutlineSelectionRange(lines, span) {
   const nextSibling = remainingSiblings[afterIdx + 1];
   const basePos = startNode.position;
   const endPos = nextSibling ? nextSibling.position : basePos + 1;
+  const topLevelCount = parsedLines.filter(l => l.depth === 0).length;
 
+  // Walk the parsed lines with a stack of "most recently created row at each depth" — each new
+  // line nests under whichever shallower row most recently preceded it, a direct translation of
+  // the tab indentation into parent/child relationships. Top-level continuations (depth 0) are
+  // spaced fractionally into the gap after startNode, same as the flat case always was; anything
+  // deeper is a brand-new subtree with no pre-existing siblings to conflict with, so it just
+  // counts up from 0. New nested rows use "dashed", matching how sub-item detail lines are
+  // styled everywhere else in this outline.
+  const stack = [{ depth: 0, id: startId }];
+  let topSeen = 0;
   let lastRowId = startId;
-  for (let i = 1; i < newLines.length; i++) {
-    const frac = basePos + (endPos - basePos) * (i / newLines.length);
-    const { tempId } = insertOptimisticOutlineNode(startNode.parent_id, frac, startNode.list_style, newLines[i]);
+  for (let i = 1; i < parsedLines.length; i++) {
+    const { depth, text } = parsedLines[i];
+    while (stack.length > 1 && stack[stack.length - 1].depth >= depth) stack.pop();
+    const parent = stack[stack.length - 1];
+    let parentId, position, listStyle;
+    if (depth === 0) {
+      topSeen++;
+      parentId = startNode.parent_id;
+      position = basePos + (endPos - basePos) * (topSeen / topLevelCount);
+      listStyle = startNode.list_style;
+    } else {
+      parentId = parent.id;
+      position = outlineNodes.filter(n => n.parent_id === parentId).length;
+      listStyle = "dashed";
+    }
+    const { tempId } = insertOptimisticOutlineNode(parentId, position, listStyle, text);
+    stack.push({ depth, id: tempId });
     lastRowId = tempId;
   }
 
   renderTodo();
 
-  const lastLine = newLines[newLines.length - 1];
+  const lastLine = parsedLines[parsedLines.length - 1].text;
   focusOutlineNode(lastRowId, Math.max(0, lastLine.length - suffix.length));
 
   const realStartId = await resolveOutlineId(startId);
@@ -840,6 +934,10 @@ async function replaceOutlineSelectionRange(lines, span) {
 function relabelOutlineNodeId(oldId, newId) {
   document.querySelectorAll(`[data-id="${oldId}"]`).forEach(el => { el.dataset.id = newId; });
   document.querySelectorAll(`[data-parent-id="${oldId}"]`).forEach(el => { el.dataset.parentId = newId; });
+  // Any row created (optimistically) as a child of this one before this insert resolved is
+  // still carrying the old temp id as its own parent_id in memory — without this, buildOutlineTree
+  // would stop finding its parent the moment this id changes, and it'd render as orphaned/top-level.
+  outlineNodes.forEach(n => { if (n.parent_id === oldId) n.parent_id = newId; });
 }
 
 function insertOptimisticOutlineNode(parentId, position, listStyle, content) {
@@ -847,9 +945,14 @@ function insertOptimisticOutlineNode(parentId, position, listStyle, content) {
   const optimisticNode = { id: tempId, owner_id: session.user.id, parent_id: parentId, position, list_style: listStyle, content, done: false };
   outlineNodes.push(optimisticNode);
 
-  const promise = sb.from("todo_outline")
-    .insert({ owner_id: session.user.id, parent_id: parentId, position, list_style: listStyle, content })
-    .select().single()
+  // parentId may itself be another row's still-unresolved temp id (e.g. nesting a pasted child
+  // under a sibling row created earlier in the very same paste) — the database has no idea what
+  // a "temp-" string is, so the real parent id has to be awaited before this row's own insert
+  // can go out, even though the optimistic node above is already showing with the temp parentId.
+  const promise = resolveOutlineId(parentId)
+    .then(realParentId => sb.from("todo_outline")
+      .insert({ owner_id: session.user.id, parent_id: realParentId, position, list_style: listStyle, content })
+      .select().single())
     .then(({ data, error }) => {
       if (error) {
         console.error("insertOptimisticOutlineNode:", error.message);
@@ -904,6 +1007,7 @@ async function outlineEnterKey(el, id) {
   const nextSibling = siblings[idx + 1];
   const newPosition = nextSibling ? (node.position + nextSibling.position) / 2 : node.position + 1;
 
+  pushOutlineUndoSnapshot();
   node.content = before;
   const { tempId } = insertOptimisticOutlineNode(node.parent_id, newPosition, node.list_style, after);
   renderTodo();
@@ -950,6 +1054,7 @@ async function outlineBackspaceKey(e, el, id) {
   const caretPos = prev.content.length;
   const mergedContent = (prev.content + currentContent).trim();
 
+  pushOutlineUndoSnapshot();
   prev.content = mergedContent;
   outlineNodes = outlineNodes.filter(n => n.id !== id);
   renderTodo();
@@ -1081,8 +1186,22 @@ function initOutlineEditing() {
   wrap.addEventListener("keydown", e => {
     if (!isOwnData()) return;
     if (e.key === "Delete") { outlineDeleteKey(e); return; }
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "z") {
+      // Only take over Cmd/Ctrl+Z when there's actually a structural change to undo — otherwise
+      // leave it alone so native undo still handles plain typing within a row.
+      if (outlineUndoStack.length) { e.preventDefault(); undoLastOutlineChange(); }
+      return;
+    }
     const el = currentOutlineRow();
     if (!el) return;
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") {
+      // Native Select All would grab the entire shared editable region (every row in the whole
+      // list, not just this one) since the outline is one contenteditable host — scope it to
+      // the current row instead, matching what "select all" means in an ordinary text field.
+      e.preventDefault();
+      selectAllInOutlineNode(el.dataset.id);
+      return;
+    }
     if (e.key === "Enter") { e.preventDefault(); outlineEnterKey(el, el.dataset.id); }
     else if (e.key === "Backspace") { outlineBackspaceKey(e, el, el.dataset.id); }
     else if (e.key === "ArrowDown" || e.key === "ArrowUp") { outlineArrowKey(e, el); }
