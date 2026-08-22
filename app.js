@@ -25,7 +25,6 @@ function isOwnData() { return viewingOwnerId === session.user.id; }
 let session = null;
 let leads = [];
 let outlineNodes = [];
-let outlineCompletedCollapsed = true;
 let dailyMusts = [];
 let realtimeReady = false;
 let viewingOwnerId = null;
@@ -605,12 +604,6 @@ function buildOutlineTree(nodes) {
   return roots;
 }
 
-function defaultChildStyle(node) {
-  if (node.children.length) return node.children[0].list_style;
-  if (node.list_style === "numbered" || node.list_style === "dashed") return node.list_style;
-  return "dashed";
-}
-
 // Every Supabase round-trip in this environment costs ~1s, so these mutations update local
 // state and re-render immediately (optimistic), firing the actual write in the background.
 // The realtime subscription still reconciles with the server afterward (harmless no-op re-render
@@ -638,14 +631,6 @@ async function resolveOutlineId(id) {
 // firing well after a fast insert).
 function findOutlineNodeByAnyId(id) {
   return outlineNodes.find(n => n.id === id) || outlineNodes.find(n => n.id === pendingOutlineIds[id]);
-}
-
-async function toggleOutlineDone(id, done) {
-  const node = findOutlineNodeByAnyId(id);
-  if (node) { node.done = done; renderTodo(); }
-  const realId = await resolveOutlineId(id);
-  const { error } = await sb.from("todo_outline").update({ done }).eq("id", realId);
-  if (error) console.error("toggleOutlineDone:", error.message);
 }
 
 // A row's own content should only ever hold plain text plus inline <strong> spans (from
@@ -760,17 +745,6 @@ async function undoLastOutlineChange() {
 function focusOutlineAncestorOf(el) {
   const editable = el && el.closest(".outline-editable");
   if (editable) editable.focus();
-}
-
-function selectAllInOutlineNode(id) {
-  const el = document.querySelector(`.outline-content[data-id="${id}"]`);
-  if (!el) return;
-  focusOutlineAncestorOf(el);
-  const range = document.createRange();
-  range.selectNodeContents(el);
-  const sel = window.getSelection();
-  sel.removeAllRanges();
-  sel.addRange(range);
 }
 
 // Finds the .outline-content row the caret is currently sitting in, if any.
@@ -1085,18 +1059,14 @@ function nextPositionUnder(parentId) {
   return siblings.length ? Math.max(...siblings.map(n => n.position)) + 1 : 0;
 }
 
-// Whole-document replace: fires when the user Cmd+A's the ENTIRE active list (see
-// isWholeRegionSelected) and pastes over it — the same way Select All + paste replaces a whole
-// document in Notes or Word, used here to resync from an external copy of the list rather than
-// editing individual rows. `parsedLines` may legitimately be empty (a real Cmd+A + Delete/
-// Backspace clearing everything); only a missing array short-circuits.
+// Whole-document replace: fires when the user Cmd+A's the ENTIRE list (see isWholeRegionSelected)
+// and pastes over it — the same way Select All + paste replaces a whole document in Notes or
+// Word, used here to resync from an external copy of the list rather than editing individual
+// rows. `parsedLines` may legitimately be empty (a real Cmd+A + Delete/Backspace clearing
+// everything); only a missing array short-circuits.
 //
-// Unlike replaceOutlineSelectionRange (a same-parent run of rows), this wipes every node
-// currently in scope and rebuilds it from parsedLines — "in scope" meaning exactly what this
-// editable region is rendering right now (the active tree, with completed subtrees already
-// pulled out — completed items are a separate contenteditable region entirely, so a Cmd+A here
-// never touches them). Only declines for the completed region itself, which isn't part of this
-// workflow.
+// Unlike replaceOutlineSelectionRange (a same-parent run of rows), this wipes every node in the
+// tree and rebuilds it from parsedLines.
 //
 // Section headings (list_style "none") in the new content are matched by exact text against
 // whatever heading of the same name already exists anywhere in the CURRENT tree and inherit that
@@ -1106,46 +1076,23 @@ function nextPositionUnder(parentId) {
 // indistinguishable siblings whether one is conceptually "under" the other or not). A heading
 // with no existing match — a genuinely new section — defaults to top-level.
 //
-// Beyond headings, ANY active node (heading or not) whose exact content and list_style matches a
-// line in the new content keeps its own id and gets updated in place rather than deleted and
-// recreated — this is what stops a completed item from being silently orphaned when its parent
-// still exists in the new document but would otherwise have been swapped for a fresh row with a
-// new id. Only a node with no match at all is actually deleted — and even then, if deleting it
-// would leave a completed item's parent_id pointing at a row that no longer exists, the whole
-// operation aborts with nothing changed rather than risk that.
-async function replaceEntireOutlineRegion(parsedLines, editableEl) {
+// Beyond headings, ANY node (heading or not) whose exact content and list_style matches a line in
+// the new content keeps its own id and gets updated in place rather than deleted and recreated.
+// Only a node with no match at all is actually deleted.
+async function replaceEntireOutlineRegion(parsedLines) {
   if (!parsedLines) return false;
-  if (editableEl.closest(".completed-list")) return false;
-
-  const tree = buildOutlineTree(outlineNodes);
-  (function extractCompleted(nodes) {
-    for (let i = nodes.length - 1; i >= 0; i--) {
-      const n = nodes[i];
-      if (n.list_style !== "none" && n.done) nodes.splice(i, 1);
-      else extractCompleted(n.children);
-    }
-  })(tree);
-  const activeIds = new Set();
-  (function collect(nodes) { nodes.forEach(n => { activeIds.add(n.id); collect(n.children); }); })(tree);
-  const activeNodes = outlineNodes.filter(n => activeIds.has(n.id));
-  const completedNodes = outlineNodes.filter(n => !activeIds.has(n.id));
 
   const usedLineIdx = new Set();
   const matchForNode = new Map();
-  activeNodes.forEach(node => {
+  outlineNodes.forEach(node => {
     const idx = parsedLines.findIndex((l, i) =>
       !usedLineIdx.has(i) && l.text.trim() === node.content.trim() && (l.listType || "dashed") === node.list_style
     );
     if (idx !== -1) { usedLineIdx.add(idx); matchForNode.set(node.id, idx); }
   });
 
-  const toDeleteNodes = activeNodes.filter(n => !matchForNode.has(n.id));
+  const toDeleteNodes = outlineNodes.filter(n => !matchForNode.has(n.id));
   const toDeleteIds = new Set(toDeleteNodes.map(n => n.id));
-  const wouldOrphan = completedNodes.some(n => n.parent_id && toDeleteIds.has(n.parent_id));
-  if (wouldOrphan) {
-    console.error("replaceEntireOutlineRegion: would orphan a completed item's parent, aborting without changes");
-    return false;
-  }
 
   const existingHeadingParentByText = new Map();
   outlineNodes.forEach(n => {
@@ -1248,18 +1195,6 @@ function insertOptimisticOutlineNode(parentId, position, listStyle, content) {
   return { tempId, optimisticNode };
 }
 
-async function addOutlineNode(parentId, listStyle) {
-  const siblings = outlineNodes.filter(n => (n.parent_id || null) === (parentId || null));
-  const position = siblings.length ? Math.max(...siblings.map(n => n.position)) + 1 : 0;
-  const { tempId } = insertOptimisticOutlineNode(parentId, position, listStyle, "New item");
-  renderTodo();
-  selectAllInOutlineNode(tempId);
-}
-
-async function addOutlineSection() {
-  await addOutlineNode(null, "none");
-}
-
 function focusOutlineNode(id, offset) {
   const el = document.querySelector(`.outline-content[data-id="${id}"]`);
   if (!el) return;
@@ -1306,7 +1241,7 @@ async function outlineBackspaceKey(e, el, id) {
     const wholeEditableEl = currentEditableRegion();
     if (wholeEditableEl && isWholeRegionSelected(rawRange, wholeEditableEl)) {
       e.preventDefault();
-      await replaceEntireOutlineRegion([], wholeEditableEl);
+      await replaceEntireOutlineRegion([]);
       return;
     }
     const span = getSelectionRowSpan();
@@ -1361,7 +1296,7 @@ function outlineDeleteKey(e) {
   const wholeEditableEl = currentEditableRegion();
   if (wholeEditableEl && isWholeRegionSelected(rawRange, wholeEditableEl)) {
     e.preventDefault();
-    replaceEntireOutlineRegion([], wholeEditableEl);
+    replaceEntireOutlineRegion([]);
     return;
   }
   const span = getSelectionRowSpan();
@@ -1370,7 +1305,7 @@ function outlineDeleteKey(e) {
   replaceOutlineSelectionRange([{ depth: 0, text: "", listType: null }], span);
 }
 
-function renderOutlineList(nodes, own) {
+function renderOutlineList(nodes) {
   if (!nodes.length) return "";
   let numberIdx = 0;
   const rows = nodes.map(n => {
@@ -1378,90 +1313,32 @@ function renderOutlineList(nodes, own) {
     if (n.list_style === "numbered") { numberIdx++; marker = numberIdx + "."; }
     else if (n.list_style === "dashed") { marker = "&ndash;"; }
     const isHeading = n.list_style === "none";
-    // checkbox/marker/add-btn are contenteditable="false" islands inside the shared editable
-    // region below (see renderOutline) — otherwise they'd be typeable/selectable text themselves.
-    const checkbox = !isHeading ? `
-      <span class="checkbox${n.done ? " checked" : ""}${own ? "" : " disabled"}" contenteditable="false" data-action="outline-toggle" data-id="${n.id}" data-done="${n.done}">
-        <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><path d="M4 12l6 6L20 6"/></svg>
-      </span>` : "";
+    // marker is a contenteditable="false" island inside the shared editable region below (see
+    // renderOutline) — otherwise it'd be typeable/selectable text itself.
     return `
       <div class="outline-node ${isHeading ? "outline-heading" : "outline-item"}">
         <div class="outline-row">
-          ${checkbox}
           ${marker ? `<span class="outline-marker" contenteditable="false">${marker}</span>` : ""}
           <div class="outline-content" data-id="${n.id}">${n.content ? parseBold(n.content) : "<br>"}</div>
         </div>
-        ${renderOutlineList(n.children, own)}
-        ${own ? `<button type="button" class="outline-add-btn" contenteditable="false" data-parent-id="${n.id}" data-style="${defaultChildStyle(n)}">+ add</button>` : ""}
+        ${renderOutlineList(n.children)}
       </div>
     `;
   }).join("");
   return `<div class="outline-list">${rows}</div>`;
 }
 
-// The whole tree (every depth, every section) renders inside one shared contenteditable div per
-// list (active vs. completed) rather than one per row — that's what lets a native mouse-drag
-// selection span multiple rows at all; browsers won't let a drag selection cross from one
-// contenteditable region into a separate one. Enter/Backspace/arrow-nav/paste are still fully
-// custom-handled (see initOutlineEditing below), so this doesn't hand line-splitting over to the
-// browser — it only unlocks selection, copy, and paste spanning rows.
+// The whole tree (every depth, every section) renders inside one shared contenteditable div
+// rather than one per row — that's what lets a native mouse-drag selection span multiple rows at
+// all; browsers won't let a drag selection cross from one contenteditable region into a separate
+// one. Enter/Backspace/arrow-nav/paste are still fully custom-handled (see initOutlineEditing
+// below), so this doesn't hand line-splitting over to the browser — it only unlocks selection,
+// copy, and paste spanning rows.
 function renderOutline() {
   const own = isOwnData();
   const tree = buildOutlineTree(outlineNodes);
-  const completed = [];
-
-  (function extract(nodes) {
-    for (let i = nodes.length - 1; i >= 0; i--) {
-      const n = nodes[i];
-      if (n.list_style !== "none" && n.done) {
-        completed.push(n);
-        nodes.splice(i, 1);
-      } else {
-        extract(n.children);
-      }
-    }
-  })(tree);
-  completed.sort((a, b) => a.position - b.position);
-
-  let html = `<div class="outline-editable" contenteditable="${own}">${renderOutlineList(tree, own)}</div>`;
-  if (own) html += `<button type="button" id="outline-add-section-btn" class="add-item-btn">+ Add section</button>`;
-
-  if (completed.length) {
-    html += `
-      <div class="completed-section">
-        <button type="button" id="outline-completed-toggle" class="completed-toggle">
-          ${outlineCompletedCollapsed ? "&#9656;" : "&#9662;"} Completed (${completed.length})
-        </button>
-        <div class="completed-list"${outlineCompletedCollapsed ? " hidden" : ""}>
-          <div class="outline-editable" contenteditable="${own}">${renderOutlineList(completed, own)}</div>
-        </div>
-      </div>
-    `;
-  }
-
-  document.getElementById("todo-wrap").innerHTML = html;
-
-  document.querySelectorAll('#todo-wrap .checkbox[data-action="outline-toggle"]:not(.disabled)').forEach(cb => {
-    cb.addEventListener("mousedown", e => e.preventDefault()); // don't disturb an active selection/caret
-    cb.addEventListener("click", e => {
-      e.stopPropagation();
-      toggleOutlineDone(cb.dataset.id, cb.dataset.done !== "true");
-    });
-  });
-
-  document.querySelectorAll("#todo-wrap .outline-add-btn").forEach(btn => {
-    btn.addEventListener("mousedown", e => e.preventDefault());
-    btn.addEventListener("click", () => addOutlineNode(btn.dataset.parentId, btn.dataset.style));
-  });
-
-  const addSectionBtn = document.getElementById("outline-add-section-btn");
-  if (addSectionBtn) addSectionBtn.addEventListener("click", addOutlineSection);
-
-  const completedToggle = document.getElementById("outline-completed-toggle");
-  if (completedToggle) completedToggle.addEventListener("click", () => {
-    outlineCompletedCollapsed = !outlineCompletedCollapsed;
-    renderOutline();
-  });
+  document.getElementById("todo-wrap").innerHTML =
+    `<div class="outline-editable" contenteditable="${own}">${renderOutlineList(tree)}</div>`;
 }
 
 // Attached once to the stable #todo-wrap element (renderOutline only ever replaces its
@@ -1555,7 +1432,7 @@ function initOutlineEditing() {
     const rawRange = sel.getRangeAt(0);
     const wholeEditableEl = currentEditableRegion();
     if (wholeEditableEl && isWholeRegionSelected(rawRange, wholeEditableEl)) {
-      replaceEntireOutlineRegion(parsedLines, wholeEditableEl);
+      replaceEntireOutlineRegion(parsedLines);
       return;
     }
 
