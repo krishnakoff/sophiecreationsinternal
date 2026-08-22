@@ -1305,13 +1305,26 @@ function outlineDeleteKey(e) {
   replaceOutlineSelectionRange([{ depth: 0, text: "", listType: null }], span);
 }
 
-function renderOutlineList(nodes) {
+// Numbered markers compose their ancestor's own number as a prefix — a numbered item nested
+// under item "2." renders as "2.1.", "2.2.", ...; a further nested one under "2.1." renders as
+// "2.1.1." — rather than every nested numbered list restarting at a bare "1." on its own.
+// numberPrefix carries that path down through the recursion; it only ever gets set (to the
+// current item's own full marker) when the current node itself is numbered, so a numbered list
+// nested under a dashed item or a heading still starts fresh at "1." — there's no numeric parent
+// path to inherit there. Dashed markers are untouched, always just "–" regardless of depth.
+function renderOutlineList(nodes, numberPrefix = "") {
   if (!nodes.length) return "";
   let numberIdx = 0;
   const rows = nodes.map(n => {
     let marker = "";
-    if (n.list_style === "numbered") { numberIdx++; marker = numberIdx + "."; }
-    else if (n.list_style === "dashed") { marker = "&ndash;"; }
+    let childPrefix = "";
+    if (n.list_style === "numbered") {
+      numberIdx++;
+      marker = numberPrefix + numberIdx + ".";
+      childPrefix = marker;
+    } else if (n.list_style === "dashed") {
+      marker = "&ndash;";
+    }
     const isHeading = n.list_style === "none";
     // marker is a contenteditable="false" island inside the shared editable region below (see
     // renderOutline) — otherwise it'd be typeable/selectable text itself.
@@ -1321,7 +1334,7 @@ function renderOutlineList(nodes) {
           ${marker ? `<span class="outline-marker" contenteditable="false">${marker}</span>` : ""}
           <div class="outline-content" data-id="${n.id}">${n.content ? parseBold(n.content) : "<br>"}</div>
         </div>
-        ${renderOutlineList(n.children)}
+        ${renderOutlineList(n.children, childPrefix)}
       </div>
     `;
   }).join("");
