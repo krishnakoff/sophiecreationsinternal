@@ -741,10 +741,15 @@ async function undoLastOutlineChange() {
 }
 
 // Focuses the shared editable ancestor (not the row itself — rows aren't separately focusable)
-// then places the caret/selection inside the given row.
+// then places the caret/selection inside the given row. This fires after every Enter/Backspace/
+// paste, right after renderTodo() has just replaced the whole outline's markup — a plain
+// .focus() call in that situation makes the browser scroll the newly-(re)focused element into
+// view on its own, which is the entire outline (a single huge contenteditable div), so the page
+// visibly jumped to its top on every Enter. preventScroll stops that default behavior; the caret
+// still lands in the right row either way since that's handled separately below.
 function focusOutlineAncestorOf(el) {
   const editable = el && el.closest(".outline-editable");
-  if (editable) editable.focus();
+  if (editable) editable.focus({ preventScroll: true });
 }
 
 // Finds the .outline-content row the caret is currently sitting in, if any.
@@ -813,7 +818,7 @@ function currentEditableRegion() {
 function selectAllInOutlineEditable(el) {
   const editable = el.closest(".outline-editable");
   if (!editable) return;
-  editable.focus();
+  editable.focus({ preventScroll: true });
   const range = document.createRange();
   range.selectNodeContents(editable);
   const sel = window.getSelection();
