@@ -852,9 +852,17 @@ function selectAllInOutlineEditable(el) {
 // parseListChildren already gave it, until the next heading resets that base back to 0.
 function parseNestedLinesFromHtml(html) {
   if (!html) return null;
-  const container = document.createElement("div");
-  container.innerHTML = html;
-  if (!container.querySelector("li")) return null;
+  // Apple Notes (and most rich sources) hand over a FULL HTML document on the clipboard —
+  // <!doctype>, <html>, a <head> with a <style> block full of the source's CSS rules, then
+  // <body>. Setting that whole string as a plain <div>'s innerHTML doesn't cleanly separate head
+  // from body the way real document parsing does — a leading <style> tag's raw CSS text ends up
+  // treated as if it were a paragraph of visible content, exactly the way "p.p1 {margin: ...}"
+  // showed up as a line in a real paste. Parsing through DOMParser instead produces a proper,
+  // fully separate Document (never inserted into the live page either), whose .body correctly
+  // excludes anything that belongs in .head.
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const container = doc.body;
+  if (!container || !container.querySelector("li")) return null;
 
   function textOf(el) {
     const clone = el.cloneNode(true);
