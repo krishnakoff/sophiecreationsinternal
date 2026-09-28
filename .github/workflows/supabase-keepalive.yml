@@ -1,9 +1,17 @@
 name: Supabase Keep-Alive
 
 # Supabase free-tier projects auto-pause after 7 days with no activity.
-# This pings the REST API every 3 days (well inside that window) so
-# Sophie Internal never gets paused. Uses the anon key already committed
-# in config.js (documented there as safe to be public) — no secrets needed.
+#
+# v1 of this workflow used the public anon key to SELECT from `leads`, but RLS
+# only grants that table to the `authenticated` role — so every ping got a
+# real HTTP 200 while PostgREST silently filtered the result to zero rows.
+# In practice that did NOT count as "activity" to Supabase's pause detector:
+# the project was paused again despite the workflow succeeding on schedule.
+#
+# Fix: perform a genuine WRITE (an UPDATE, not a filtered-to-nothing read)
+# against a dedicated `public._keepalive` heartbeat row, using the
+# service_role key (stored as the SUPABASE_SERVICE_ROLE_KEY repo secret,
+# never committed) since RLS blocks anon/authenticated writes entirely.
 
 on:
   schedule:
@@ -14,12 +22,14 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Ping Supabase REST API
+      - name: Write heartbeat to Supabase
+        env:
+          SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
-          ANON_KEY=$(grep SUPABASE_ANON_KEY config.js | sed -E 's/.*"([^"]+)".*/\1/')
           curl -sf -o /dev/null -w "HTTP %{http_code}\n" \
-            "https://grkqbudhjxxewrhpdjtz.supabase.co/rest/v1/leads?select=id&limit=1" \
-            -H "apikey: $ANON_KEY" \
-            -H "Authorization: Bearer $ANON_KEY"
+            -X PATCH "https://grkqbudhjxxewrhpdjtz.supabase.co/rest/v1/_keepalive?id=eq.1" \
+            -H "apikey: $SERVICE_ROLE_KEY" \
+            -H "Authorization: Bearer $SERVICE_ROLE_KEY" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            -d '{"pinged_at":"now()"}'
