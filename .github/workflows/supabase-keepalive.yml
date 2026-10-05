@@ -2,34 +2,55 @@ name: Supabase Keep-Alive
 
 # Supabase free-tier projects auto-pause after 7 days with no activity.
 #
-# v1 of this workflow used the public anon key to SELECT from `leads`, but RLS
-# only grants that table to the `authenticated` role — so every ping got a
-# real HTTP 200 while PostgREST silently filtered the result to zero rows.
-# In practice that did NOT count as "activity" to Supabase's pause detector:
-# the project was paused again despite the workflow succeeding on schedule.
+# v1 used the anon key to SELECT from `leads` - RLS filtered it to zero rows,
+# which didn't count as activity (project paused anyway despite the workflow
+# succeeding on schedule).
 #
-# Fix: perform a genuine WRITE (an UPDATE, not a filtered-to-nothing read)
-# against a dedicated `public._keepalive` heartbeat row, using the
-# service_role key (stored as the SUPABASE_SERVICE_ROLE_KEY repo secret,
-# never committed) since RLS blocks anon/authenticated writes entirely.
+# v2 switched to a genuine UPDATE via the service_role key against a
+# dedicated _keepalive row - a real, verified write (confirmed via direct
+# timestamp check). The project has in fact stayed live since - but the
+# "going to be paused" warning email kept firing anyway, within ~21 hours of
+# a confirmed real write. That means Supabase's warning-email trigger and
+# its actual pause trigger aren't reading the same signal, and/or whatever
+# the warning checks isn't satisfied by a PostgREST API call at all.
+#
+# v3 (this version) adds a second, independent heartbeat path: a direct
+# Postgres connection through the pooler (DATABASE_URL secret), not routed
+# through the PostgREST HTTP layer. This is the closest a script can get to
+# "real app traffic" against the actual database resource, in case that's
+# what's actually being measured. Also moved to a daily cadence (was every
+# 3 days) for extra margin against the 7-day window either way.
+#
+# Known limitation: Supabase doesn't publish the exact activity criteria, so
+# this is still a best-effort workaround, not a guarantee - see the repo's
+# PR history for the full diagnostic trail if this needs revisiting again.
 
 on:
   schedule:
-    - cron: "0 3 */3 * *"
+    - cron: "0 3 * * *"
   workflow_dispatch: {}
 
 jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Write heartbeat to Supabase
+      - name: Write heartbeat via REST (service_role key)
         env:
           SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
-          curl -sf -o /dev/null -w "HTTP %{http_code}\n" \
+          curl -sf -o /dev/null -w "REST heartbeat: HTTP %{http_code}\n" \
             -X PATCH "https://grkqbudhjxxewrhpdjtz.supabase.co/rest/v1/_keepalive?id=eq.1" \
             -H "apikey: $SERVICE_ROLE_KEY" \
             -H "Authorization: Bearer $SERVICE_ROLE_KEY" \
             -H "Content-Type: application/json" \
             -H "Prefer: return=minimal" \
             -d '{"pinged_at":"now()"}'
+
+      - name: Write heartbeat via direct Postgres connection
+        env:
+          PGCONNECT_TIMEOUT: "15"
+          DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c \
+            "UPDATE public._keepalive SET pinged_at = now() WHERE id = 1; SELECT pinged_at FROM public._keepalive WHERE id = 1;"
