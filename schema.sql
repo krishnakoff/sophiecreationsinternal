@@ -141,6 +141,29 @@ create table if not exists public.candidates (
   updated_at timestamptz not null default now()
 );
 
+-- ---------- team_members (company org chart, rendered on the Team tab) ----------
+-- Company-wide, not per-owner: the Team tab shows every active row no matter whose name is
+-- selected in the owner switch. The chart is a tree built from reports_to (null = the top of the
+-- org), with position ordering siblings left to right. Read-only in the web app; added/edited from
+-- chat (see CLAUDE.md). status 'former' keeps someone on record after they leave without showing
+-- them on the chart. candidate_id links a hire back to their interview row in candidates.
+create table if not exists public.team_members (
+  id uuid primary key default gen_random_uuid(),
+  owner_id uuid not null references auth.users(id) default auth.uid(),
+  name text not null,
+  title text not null default '',
+  focus text default '',
+  emails text[] not null default '{}',
+  reports_to uuid references public.team_members(id) on delete set null,
+  position numeric not null default 0,
+  candidate_id uuid references public.candidates(id) on delete set null,
+  start_date date,
+  status text not null default 'active' check (status in ('active', 'former')),
+  notes text default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 -- ---------- keep updated_at fresh ----------
 create or replace function public.touch_updated_at()
 returns trigger language plpgsql as $$
@@ -166,6 +189,10 @@ drop trigger if exists candidates_touch_updated_at on public.candidates;
 create trigger candidates_touch_updated_at before update on public.candidates
   for each row execute function public.touch_updated_at();
 
+drop trigger if exists team_members_touch_updated_at on public.team_members;
+create trigger team_members_touch_updated_at before update on public.team_members
+  for each row execute function public.touch_updated_at();
+
 -- ---------- row level security: everyone signed in can read everything; you can only write your own rows ----------
 alter table public.leads enable row level security;
 alter table public.todo_items enable row level security;
@@ -173,6 +200,7 @@ alter table public.outbound_emails enable row level security;
 alter table public.todo_outline enable row level security;
 alter table public.daily_musts enable row level security;
 alter table public.candidates enable row level security;
+alter table public.team_members enable row level security;
 
 drop policy if exists "authenticated full access" on public.leads;
 drop policy if exists "authenticated read all" on public.leads;
@@ -254,6 +282,19 @@ create policy "authenticated update own" on public.candidates
 create policy "authenticated delete own" on public.candidates
   for delete using (auth.uid() = owner_id);
 
+drop policy if exists "authenticated read all" on public.team_members;
+drop policy if exists "authenticated insert own" on public.team_members;
+drop policy if exists "authenticated update own" on public.team_members;
+drop policy if exists "authenticated delete own" on public.team_members;
+create policy "authenticated read all" on public.team_members
+  for select using (auth.role() = 'authenticated');
+create policy "authenticated insert own" on public.team_members
+  for insert with check (auth.uid() = owner_id);
+create policy "authenticated update own" on public.team_members
+  for update using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+create policy "authenticated delete own" on public.team_members
+  for delete using (auth.uid() = owner_id);
+
 create index if not exists leads_owner_id_idx on public.leads(owner_id);
 create index if not exists todo_items_owner_id_idx on public.todo_items(owner_id);
 create index if not exists outbound_emails_owner_id_idx on public.outbound_emails(owner_id);
@@ -264,6 +305,7 @@ create index if not exists todo_outline_parent_id_idx on public.todo_outline(par
 create index if not exists daily_musts_owner_id_idx on public.daily_musts(owner_id);
 create index if not exists candidates_role_idx on public.candidates(role);
 create index if not exists candidates_emails_idx on public.candidates using gin (emails);
+create index if not exists team_members_reports_to_idx on public.team_members(reports_to);
 
 -- ---------- realtime: push live changes to every connected browser ----------
 alter publication supabase_realtime add table public.leads;
@@ -271,6 +313,7 @@ alter publication supabase_realtime add table public.todo_items;
 alter publication supabase_realtime add table public.outbound_emails;
 alter publication supabase_realtime add table public.todo_outline;
 alter publication supabase_realtime add table public.daily_musts;
+alter publication supabase_realtime add table public.team_members;
 
 -- ---------- seed the 30 priority items (safe to run once; skipped if already seeded) ----------
 -- Requires the admin account (Sanjay) to already exist (Authentication -> Users -> Add user, email sanjay@sophiecreations.net).

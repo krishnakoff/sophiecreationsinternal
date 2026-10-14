@@ -26,6 +26,7 @@ let session = null;
 let leads = [];
 let outlineNodes = [];
 let dailyMusts = [];
+let teamMembers = [];
 let realtimeReady = false;
 let viewingOwnerId = null;
 
@@ -121,7 +122,7 @@ if (lastTab && document.getElementById("view-" + lastTab)) switchTab(lastTab);
 
 // ---------- data + realtime ----------
 async function loadAll() {
-  await Promise.all([loadLeads(), loadOutline(), loadOutboundStats(), loadMusts()]);
+  await Promise.all([loadLeads(), loadOutline(), loadOutboundStats(), loadMusts(), loadTeam()]);
   subscribeRealtime();
 }
 
@@ -147,6 +148,9 @@ function subscribeRealtime() {
       if (active && active.classList && active.classList.contains("must-content")) return; // don't yank focus mid-edit
       loadMusts();
     })
+    .subscribe();
+  sb.channel("public:team_members")
+    .on("postgres_changes", { event: "*", schema: "public", table: "team_members" }, loadTeam)
     .subscribe();
 }
 
@@ -355,6 +359,40 @@ function renderCrm() {
 // ---------- To-Do (shared outline format for every account) ----------
 function renderTodo() {
   renderOutline();
+}
+
+// ---------- Team (company org chart) ----------
+// Company-wide: loads every active member regardless of whose name is selected in the owner
+// switch, and builds the tree from reports_to (null = top of the org). Read-only here — members
+// are added/edited from chat, see CLAUDE.md.
+async function loadTeam() {
+  const { data, error } = await sb.from("team_members").select("*").eq("status", "active").order("position");
+  if (!error) { teamMembers = data || []; renderTeam(); }
+  else console.error("loadTeam:", error.message);
+}
+
+function renderTeam() {
+  const wrap = document.getElementById("team-wrap");
+  const ids = new Set(teamMembers.map(m => m.id));
+  const childrenOf = id => teamMembers.filter(m => (ids.has(m.reports_to) ? m.reports_to : null) === id);
+  const card = m => `
+    <div class="org-card">
+      <div class="org-name">${escapeHtml(m.name)}</div>
+      <div class="org-title">${escapeHtml(m.title)}</div>
+      ${m.focus ? `<div class="org-focus">${escapeHtml(m.focus)}</div>` : ""}
+      ${m.emails && m.emails[0] ? `<a class="org-email" href="mailto:${escapeHtml(m.emails[0])}">${escapeHtml(m.emails[0]).replace("@", "@<wbr>")}</a>` : ""}
+    </div>`;
+  const branch = (nodes, seen) => {
+    const rows = nodes.filter(m => !seen.has(m.id));
+    if (!rows.length) return "";
+    return `<ul class="org-level">${rows.map(m => {
+      const next = new Set(seen).add(m.id);
+      return `<li>${card(m)}${branch(childrenOf(m.id), next)}</li>`;
+    }).join("")}</ul>`;
+  };
+  wrap.innerHTML = teamMembers.length
+    ? `<div class="org-chart">${branch(childrenOf(null), new Set())}</div>`
+    : `<div class="org-empty">No team members yet.</div>`;
 }
 
 // ---------- 3 Musts Today ----------

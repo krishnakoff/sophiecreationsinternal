@@ -366,6 +366,35 @@ curl -s -X POST "$SUPABASE_URL/rest/v1/candidates" \
        "red_flags": null, "scores": {"comms": 4}, "also_fit_for": []}'
 ```
 
+## Team / org chart
+
+Table `public.team_members` holds the company org chart, rendered read-only on the web app's
+**Team** tab (realtime-enabled, so chat edits appear live). It's company-wide, not per-owner —
+the tab shows every `status = 'active'` row whichever name is selected in the owner switch, so
+write rows with Krishna's `owner_id` by default (it's just a technical field here).
+
+- The chart is a tree built from **`reports_to`** (the manager's `team_members.id`; `null` =
+  top of the org, currently just Sanjay). **`position`** orders siblings left to right.
+  Current structure: Sanjay (CEO) → Krishna (Director) and Chloe; Krishna → Priscilla, Karen,
+  Recelyn.
+- `title` is the job title shown on the card; `focus` is a one-line "what they actually handle"
+  under it; `emails` is an array (the first one is shown).
+- **Someone leaves** → set `status: "former"` rather than deleting, so they stay on record.
+  Anyone who reported to them needs a new `reports_to`.
+- **New hire from the interview log** → insert a `team_members` row with `candidate_id` set to
+  their `candidates.id`, and set that candidate's `status` to `hire`.
+- Don't store sensitive personal documents here (IDs, bank details) — every signed-in account
+  can read this table.
+
+```bash
+curl -s -X POST "$SUPABASE_URL/rest/v1/team_members" \
+  -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"owner_id": "<id>", "name": "...", "title": "...", "focus": "...", "emails": ["..."],
+       "reports_to": "<manager team_members.id>", "position": <max sibling position + 1>,
+       "candidate_id": "<candidates.id or null>"}'
+```
+
 ## Other rules
 
 - Never touch the seed/schema RLS policies without checking with Krishna first — they're what
