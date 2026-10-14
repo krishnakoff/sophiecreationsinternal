@@ -111,6 +111,36 @@ create table if not exists public.daily_musts (
   unique (owner_id, slot)
 );
 
+-- ---------- candidates (hiring log — everyone interviewed, for any role) ----------
+-- Not shown anywhere in the web app; written and queried from chat (see CLAUDE.md). One row per
+-- interview: the same person interviewing for a second role gets a second row, matched up by
+-- email. role is free text (e.g. 'social_media_va', 'video_editor') so a new role needs no schema
+-- change. scores is a jsonb scorecard whose keys vary by role (VA: comms/gut/social/design,
+-- editors: whatever criteria get used) — numeric, decimals allowed. also_fit_for tags other
+-- roles someone could fill (e.g. 'video_editor', 'ecom', 'karen_backup') so a future search for
+-- that role finds them even though they interviewed for something else. verdict keeps the exact
+-- wording; status is the normalized, filterable version of it.
+create table if not exists public.candidates (
+  id uuid primary key default gen_random_uuid(),
+  owner_id uuid not null references auth.users(id) default auth.uid(),
+  role text not null,
+  name text not null,
+  emails text[] not null default '{}',
+  hourly_rate_usd numeric(6, 2),
+  age text,
+  availability text,
+  status text not null default 'pending'
+    check (status in ('hire', 'second_interview', 'maybe', 'keep_on_file', 'no', 'no_show', 'pending')),
+  verdict text,
+  notes text default '',
+  red_flags text,
+  scores jsonb not null default '{}',
+  also_fit_for text[] not null default '{}',
+  interviewed_on date,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 -- ---------- keep updated_at fresh ----------
 create or replace function public.touch_updated_at()
 returns trigger language plpgsql as $$
@@ -132,12 +162,17 @@ drop trigger if exists daily_musts_touch_updated_at on public.daily_musts;
 create trigger daily_musts_touch_updated_at before update on public.daily_musts
   for each row execute function public.touch_updated_at();
 
+drop trigger if exists candidates_touch_updated_at on public.candidates;
+create trigger candidates_touch_updated_at before update on public.candidates
+  for each row execute function public.touch_updated_at();
+
 -- ---------- row level security: everyone signed in can read everything; you can only write your own rows ----------
 alter table public.leads enable row level security;
 alter table public.todo_items enable row level security;
 alter table public.outbound_emails enable row level security;
 alter table public.todo_outline enable row level security;
 alter table public.daily_musts enable row level security;
+alter table public.candidates enable row level security;
 
 drop policy if exists "authenticated full access" on public.leads;
 drop policy if exists "authenticated read all" on public.leads;
@@ -206,6 +241,19 @@ create policy "authenticated update own" on public.daily_musts
 create policy "authenticated delete own" on public.daily_musts
   for delete using (auth.uid() = owner_id);
 
+drop policy if exists "authenticated read all" on public.candidates;
+drop policy if exists "authenticated insert own" on public.candidates;
+drop policy if exists "authenticated update own" on public.candidates;
+drop policy if exists "authenticated delete own" on public.candidates;
+create policy "authenticated read all" on public.candidates
+  for select using (auth.role() = 'authenticated');
+create policy "authenticated insert own" on public.candidates
+  for insert with check (auth.uid() = owner_id);
+create policy "authenticated update own" on public.candidates
+  for update using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+create policy "authenticated delete own" on public.candidates
+  for delete using (auth.uid() = owner_id);
+
 create index if not exists leads_owner_id_idx on public.leads(owner_id);
 create index if not exists todo_items_owner_id_idx on public.todo_items(owner_id);
 create index if not exists outbound_emails_owner_id_idx on public.outbound_emails(owner_id);
@@ -214,6 +262,8 @@ create index if not exists outbound_emails_recipient_idx on public.outbound_emai
 create index if not exists todo_outline_owner_id_idx on public.todo_outline(owner_id);
 create index if not exists todo_outline_parent_id_idx on public.todo_outline(parent_id);
 create index if not exists daily_musts_owner_id_idx on public.daily_musts(owner_id);
+create index if not exists candidates_role_idx on public.candidates(role);
+create index if not exists candidates_emails_idx on public.candidates using gin (emails);
 
 -- ---------- realtime: push live changes to every connected browser ----------
 alter publication supabase_realtime add table public.leads;
