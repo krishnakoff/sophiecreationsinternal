@@ -324,6 +324,77 @@ belong in the outline's history/tree at all.
 Setting slot 2/3 by chat request is a PATCH: `daily_musts?owner_id=eq.<id>&slot=eq.<2 or 3>` with
 `{"content": "...", "done": false}`.
 
+## Hiring candidates (interview log)
+
+Table `public.candidates` is a memory of everyone interviewed for any role (VA, video editor,
+...), so that when hiring for a role again you can check who was already seen — who to rule out,
+who to call back. **It isn't rendered anywhere in the web app** and isn't realtime-enabled; it's
+written and queried purely from chat. Both accounts can read it (same RLS as every other table).
+
+- **One row per interview.** `role` is free text, snake_case — `social_media_va`,
+  `video_editor`, etc. Reuse an existing role name if one fits (`select distinct role`); a new
+  role needs no schema change. If someone already on file interviews for a different role, add a
+  new row for that role (find them by email first) rather than overwriting the old one.
+- **`emails`** is an array — people often give two addresses; store all of them. Match returning
+  candidates with `emails=cs.{address}`.
+- **`verdict`** is the person's exact wording ("No based on value to hourly rate ratio");
+  **`status`** is the normalized version: `hire` / `second_interview` / `maybe` /
+  `keep_on_file` / `no` / `no_show` / `pending` (interviewed, no verdict yet). Always set both
+  when a verdict is given.
+- **`scores`** is a jsonb 1–5 scorecard whose keys depend on the role — VA interviews use
+  `comms`, `gut`, `social`, `design`; for a new role, use whatever criteria the person scores
+  and keep the keys consistent within that role. Decimals are fine (4.5). If a score is given as
+  words ("Fluent, able to be a manager"), map it to a number and keep the words in `notes`.
+  Leave a key out entirely rather than storing a blank.
+- **`also_fit_for`** tags other roles/uses someone could fill beyond what they interviewed for
+  (`video_editor`, `ecom`, `karen_backup`, `bookkeeping`, `graphic_design`, `web`, ...). When
+  asked "who do I have for role X", search both `role = X` and `also_fit_for` containing X.
+- `hourly_rate_usd`, `age` (text — "23/24" happens), `availability`, `red_flags`, `notes`,
+  `interviewed_on` (date, if known) are plain fields.
+
+```bash
+# who's on file for video editing that I didn't reject?
+curl -s "$SUPABASE_URL/rest/v1/candidates?or=(role.eq.video_editor,also_fit_for.cs.%7Bvideo_editor%7D)&status=not.in.(no,no_show)&select=name,emails,status,verdict,hourly_rate_usd,scores,notes" \
+  -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY"
+
+# log a new candidate
+curl -s -X POST "$SUPABASE_URL/rest/v1/candidates" \
+  -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"owner_id": "<id>", "role": "video_editor", "name": "...", "emails": ["..."],
+       "hourly_rate_usd": 4.00, "status": "pending", "verdict": null, "notes": "...",
+       "red_flags": null, "scores": {"comms": 4}, "also_fit_for": []}'
+```
+
+## Team / org chart
+
+Table `public.team_members` holds the company org chart, rendered read-only on the web app's
+**Team** tab (realtime-enabled, so chat edits appear live). It's company-wide, not per-owner —
+the tab shows every `status = 'active'` row whichever name is selected in the owner switch, so
+write rows with Krishna's `owner_id` by default (it's just a technical field here).
+
+- The chart is a tree built from **`reports_to`** (the manager's `team_members.id`; `null` =
+  top of the org, currently just Sanjay). **`position`** orders siblings left to right.
+  Current structure: Sanjay (CEO) → Krishna (Director) and Chloe; Krishna → Priscilla, Karen,
+  Recelyn.
+- `title` is the job title shown on the card; `focus` is a one-line "what they actually handle"
+  under it; `emails` is an array (the first one is shown).
+- **Someone leaves** → set `status: "former"` rather than deleting, so they stay on record.
+  Anyone who reported to them needs a new `reports_to`.
+- **New hire from the interview log** → insert a `team_members` row with `candidate_id` set to
+  their `candidates.id`, and set that candidate's `status` to `hire`.
+- Don't store sensitive personal documents here (IDs, bank details) — every signed-in account
+  can read this table.
+
+```bash
+curl -s -X POST "$SUPABASE_URL/rest/v1/team_members" \
+  -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"owner_id": "<id>", "name": "...", "title": "...", "focus": "...", "emails": ["..."],
+       "reports_to": "<manager team_members.id>", "position": <max sibling position + 1>,
+       "candidate_id": "<candidates.id or null>"}'
+```
+
 ## Other rules
 
 - Never touch the seed/schema RLS policies without checking with Krishna first — they're what
