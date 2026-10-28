@@ -400,3 +400,9 @@ curl -s -X POST "$SUPABASE_URL/rest/v1/team_members" \
 - Never touch the seed/schema RLS policies without checking with Krishna first — they're what
   keep each person's writes scoped to their own rows.
 - Read `schema.sql` for the full column/constraint reference before improvising a field.
+- **Any new table needs an explicit grant.** Since 30 Oct 2026 Supabase no longer auto-grants
+  Data API access to new tables in `public` — without
+  `grant select, insert, update, delete on public.<table> to authenticated, service_role;`
+  both the web app and the REST calls in this file get "permission denied". Add the table to the
+  grant block in `schema.sql` (next to its RLS policies) and run that grant when creating it.
+  Don't grant `anon`; the app requires sign-in.

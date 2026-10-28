@@ -295,6 +295,17 @@ create policy "authenticated update own" on public.team_members
 create policy "authenticated delete own" on public.team_members
   for delete using (auth.uid() = owner_id);
 
+-- ---------- Data API grants ----------
+-- From 30 Oct 2026 Supabase no longer auto-grants API access to NEW tables in "public": a table
+-- without an explicit grant returns "permission denied" to supabase-js / PostgREST. Tables that
+-- existed before then keep their grants; these lines are idempotent and make it explicit. Every
+-- new table must be added here (and in the same migration that creates it). anon is deliberately
+-- not granted: the app requires sign-in, and RLS policies above only admit authenticated users.
+grant select, insert, update, delete on
+  public.leads, public.outbound_emails, public.todo_items, public.todo_outline,
+  public.daily_musts, public.candidates, public.team_members
+  to authenticated, service_role;
+
 create index if not exists leads_owner_id_idx on public.leads(owner_id);
 create index if not exists todo_items_owner_id_idx on public.todo_items(owner_id);
 create index if not exists outbound_emails_owner_id_idx on public.outbound_emails(owner_id);
