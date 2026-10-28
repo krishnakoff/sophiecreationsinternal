@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Public+Sans:wght@400;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=18">
+<link rel="stylesheet" href="style.css?v=19">
 </head>
 <body>
 
@@ -31,6 +31,7 @@
       <nav class="tabs">
         <button type="button" data-target="crm" class="active">Outreach CRM</button>
         <button type="button" data-target="todo">To&#8209;Do List</button>
+        <button type="button" data-target="orders">Orders</button>
         <button type="button" data-target="team">Team</button>
       </nav>
       <button type="button" id="signout" class="signout-btn" title="Sign out">Sign out</button>
@@ -53,6 +54,12 @@
     <div id="todo-wrap"></div>
   </section>
 
+  <section id="view-orders" class="view">
+    <div class="crm-sub" id="orders-subtitle">Waiting on factories</div>
+    <div class="cards orders-cards" id="orders-cards"></div>
+    <div id="orders-table-wrap"></div>
+  </section>
+
   <section id="view-team" class="view">
     <div class="crm-sub">Company org chart</div>
     <div id="team-wrap"></div>
@@ -61,6 +68,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="config.js?v=2"></script>
-<script src="app.js?v=29"></script>
+<script src="app.js?v=30"></script>
 </body>
 </html>

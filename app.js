@@ -27,6 +27,7 @@ let leads = [];
 let outlineNodes = [];
 let dailyMusts = [];
 let teamMembers = [];
+let orders = [];
 let realtimeReady = false;
 let viewingOwnerId = null;
 
@@ -122,7 +123,7 @@ if (lastTab && document.getElementById("view-" + lastTab)) switchTab(lastTab);
 
 // ---------- data + realtime ----------
 async function loadAll() {
-  await Promise.all([loadLeads(), loadOutline(), loadOutboundStats(), loadMusts(), loadTeam()]);
+  await Promise.all([loadLeads(), loadOutline(), loadOutboundStats(), loadMusts(), loadTeam(), loadOrders()]);
   subscribeRealtime();
 }
 
@@ -151,6 +152,9 @@ function subscribeRealtime() {
     .subscribe();
   sb.channel("public:team_members")
     .on("postgres_changes", { event: "*", schema: "public", table: "team_members" }, loadTeam)
+    .subscribe();
+  sb.channel("public:orders")
+    .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, loadOrders)
     .subscribe();
 }
 
@@ -393,6 +397,155 @@ function renderTeam() {
   wrap.innerHTML = teamMembers.length
     ? `<div class="org-chart">${branch(childrenOf(null), new Set())}</div>`
     : `<div class="org-empty">No team members yet.</div>`;
+}
+
+// ---------- Orders ("waiting on" factories) ----------
+// Company-wide like Team: every open sample/bulk order, whoever is handling it. A row needs a
+// chase once the factory has gone quiet for STALE_DAYS while it's still being made, once its
+// promised date has passed, or once a loaned sample is past its return-by date. Rows are added
+// and edited from chat (see CLAUDE.md); the only in-app write is logging a factory update on
+// your own rows.
+const STALE_DAYS = 3;
+const DUE_SOON_DAYS = 5;
+const ORDER_STAGES = [
+  { id: "design", label: "Design" },
+  { id: "sampling", label: "Sampling" },
+  { id: "production", label: "Production" },
+  { id: "qc", label: "QC" },
+  { id: "ready", label: "Ready" },
+  { id: "shipped", label: "Shipped" },
+  { id: "delivered", label: "Delivered" },
+  { id: "on_hold", label: "On hold" },
+  { id: "cancelled", label: "Cancelled" }
+];
+const BEING_MADE = ["design", "sampling", "production", "qc"];
+let ordersFilter = null;
+
+async function loadOrders() {
+  const { data, error } = await sb.from("orders").select("*").order("promised_on", { nullsFirst: false });
+  if (!error) { orders = data || []; renderOrders(); }
+  else console.error("loadOrders:", error.message);
+}
+
+function sampleAwaitingReturn(o) { return o.kind === "sample" && o.return_by && !o.returned; }
+
+function orderHealth(o, today) {
+  if (o.stage === "cancelled" || (o.stage === "delivered" && !sampleAwaitingReturn(o))) return { key: "closed", reasons: [] };
+  if (o.stage === "on_hold") return { key: "hold", reasons: [] };
+
+  const chase = [], soon = [];
+  if (o.promised_on && !["shipped", "delivered"].includes(o.stage)) {
+    const diff = daysDiff(parseDate(o.promised_on), today);
+    if (diff < 0) chase.push(Math.abs(diff) + "d past promised date");
+    else if (diff <= DUE_SOON_DAYS) soon.push(diff === 0 ? "promised today" : "promised in " + diff + "d");
+  }
+  if (BEING_MADE.includes(o.stage)) {
+    if (!o.last_update_on) chase.push("no factory update logged");
+    else {
+      const age = daysDiff(today, parseDate(o.last_update_on));
+      if (age >= STALE_DAYS) chase.push("no factory update in " + age + "d");
+    }
+  }
+  if (sampleAwaitingReturn(o)) {
+    const diff = daysDiff(parseDate(o.return_by), today);
+    if (diff < 0) chase.push("sample return " + Math.abs(diff) + "d overdue");
+    else if (diff <= DUE_SOON_DAYS) soon.push("sample due back in " + diff + "d");
+  }
+  if (o.next_check_on && daysDiff(parseDate(o.next_check_on), today) <= 0) soon.push("check-in due");
+
+  if (chase.length) return { key: "chase", reasons: chase.concat(soon) };
+  if (soon.length) return { key: "soon", reasons: soon };
+  return { key: "ok", reasons: [] };
+}
+
+const HEALTH_RANK = { chase: 0, soon: 1, ok: 2, hold: 3, closed: 4 };
+
+function renderOrders() {
+  const today = new Date();
+  const enriched = orders.map(o => ({ o, h: orderHealth(o, today) }));
+  enriched.sort((a, b) => HEALTH_RANK[a.h.key] - HEALTH_RANK[b.h.key]
+    || (a.o.promised_on || "9999").localeCompare(b.o.promised_on || "9999"));
+
+  const counts = { chase: 0, soon: 0, ok: 0, hold: 0, closed: 0 };
+  enriched.forEach(e => counts[e.h.key]++);
+  const open = counts.chase + counts.soon + counts.ok;
+
+  document.getElementById("orders-subtitle").textContent =
+    "Waiting on factories — " + open + " open as of " + today.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+
+  const cardSpecs = [
+    { key: null, num: open, label: "Open", cls: "" },
+    { key: "chase", num: counts.chase, label: "Needs chase", cls: "c-garnet" },
+    { key: "soon", num: counts.soon, label: "Due soon", cls: "c-amber" },
+    { key: "ok", num: counts.ok, label: "On track", cls: "c-emerald" },
+    { key: "hold", num: counts.hold, label: "On hold", cls: "" },
+    { key: "closed", num: counts.closed, label: "Closed", cls: "" }
+  ];
+  document.getElementById("orders-cards").innerHTML = cardSpecs.map(c => `
+    <div class="card ${c.cls} ${ordersFilter === c.key ? "card-active" : ""}" data-key="${c.key ?? ""}">
+      <div class="num">${c.num}</div><div class="label">${c.label}</div>
+    </div>
+  `).join("");
+  document.querySelectorAll("#orders-cards .card").forEach(card => {
+    card.addEventListener("click", () => {
+      const key = card.dataset.key || null;
+      ordersFilter = ordersFilter === key ? null : key;
+      renderOrders();
+    });
+  });
+
+  const wrap = document.getElementById("orders-table-wrap");
+  // Default view hides closed and on-hold rows; clicking those cards shows them.
+  const visible = ordersFilter
+    ? enriched.filter(e => e.h.key === ordersFilter)
+    : enriched.filter(e => !["closed", "hold"].includes(e.h.key));
+  if (!visible.length) {
+    wrap.innerHTML = `<div class="empty-state">${orders.length ? "Nothing here." : "No orders tracked yet."}</div>`;
+    return;
+  }
+
+  const dateCell = s => s ? escapeHtml(fmtDate(parseDate(s))) : '<span class="muted">&mdash;</span>';
+  const rows = visible.map(({ o, h }) => {
+    const stageLabel = (ORDER_STAGES.find(s => s.id === o.stage) || {}).label || o.stage;
+    const age = o.last_update_on ? daysDiff(today, parseDate(o.last_update_on)) : null;
+    const canLog = o.owner_id === session.user.id && h.key !== "closed";
+    return `
+    <tr class="order-row order-${h.key}">
+      <td class="company">${escapeHtml(o.client)}
+        <div class="order-item">${escapeHtml(o.item)}${o.kind === "sample" ? ' <span class="pill pill-kind">Sample</span>' : ""}</div>
+        ${o.reference ? `<div class="order-ref">${escapeHtml(o.reference)}</div>` : ""}
+      </td>
+      <td class="muted">${escapeHtml(o.factory) || "&mdash;"}</td>
+      <td><span class="pill pill-order-${o.stage}">${escapeHtml(stageLabel)}</span></td>
+      <td class="order-date">${dateCell(o.promised_on)}</td>
+      <td class="order-update">
+        ${o.last_update_on ? `<span class="order-date">${escapeHtml(fmtDate(parseDate(o.last_update_on)))}</span> <span class="muted">(${age === 0 ? "today" : age + "d ago"})</span>` : '<span class="muted">&mdash;</span>'}
+        ${o.last_update ? `<div class="order-update-text">${escapeHtml(o.last_update)}</div>` : ""}
+      </td>
+      <td class="muted">${escapeHtml(ownerName(o.owner_id))}</td>
+      <td class="order-flags">${h.reasons.map(r => `<span class="order-flag flag-${h.key}">${escapeHtml(r)}</span>`).join("")}
+        ${o.notes ? `<div class="notes-cell">${escapeHtml(o.notes)}</div>` : ""}
+      </td>
+      <td>${canLog ? `<button type="button" class="log-update-btn" data-id="${o.id}" title="Log a factory update dated today">Log update</button>` : ""}</td>
+    </tr>`;
+  }).join("");
+  wrap.innerHTML = `
+    <div class="table-scroll">
+    <table>
+      <thead><tr><th>Client / item</th><th>Factory</th><th>Stage</th><th>Promised</th><th>Last factory update</th><th>Handler</th><th>Flags</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    </div>
+  `;
+  wrap.querySelectorAll(".log-update-btn").forEach(btn => btn.addEventListener("click", () => logOrderUpdate(btn.dataset.id)));
+}
+
+async function logOrderUpdate(id) {
+  const text = window.prompt("What did the factory say? (logged as today's update)");
+  if (text === null) return;
+  const { error } = await sb.from("orders").update({ last_update_on: hkDateToday(), last_update: text.trim() }).eq("id", id);
+  if (error) { console.error("logOrderUpdate:", error.message); alert("Couldn't save: " + error.message); return; }
+  loadOrders();
 }
 
 // ---------- 3 Musts Today ----------

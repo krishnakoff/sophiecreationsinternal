@@ -366,6 +366,53 @@ curl -s -X POST "$SUPABASE_URL/rest/v1/candidates" \
        "red_flags": null, "scores": {"comms": 4}, "also_fit_for": []}'
 ```
 
+## Orders ("waiting on" tracker)
+
+Table `public.orders` holds every open sample or bulk order that's sitting with a factory — the
+things that slip because the next move is someone else's. Rendered on the web app's **Orders**
+tab (realtime-enabled). Company-wide like `team_members`: the tab shows every row whichever name
+is selected; `owner_id` is whoever is handling that order (write with the chatting person's id
+unless told otherwise).
+
+- **`stage`**: `design` → `sampling` → `production` → `qc` → `ready` → `shipped` → `delivered`,
+  plus `on_hold` / `cancelled`. Samples go through the same stages (`kind = 'sample'`).
+- **`last_update_on` / `last_update`** — the date and gist of the factory's last *real* update
+  (a photo, a status, a ship date — not "we're working on it"). This is the field that matters:
+  the app flags a row **Needs chase** once it's 3+ days old while the order is still being made
+  (`design`–`qc`), or once `promised_on` has passed before shipping. Whenever you're told about a
+  factory update in chat ("factory sent a casting photo today"), PATCH both fields.
+- **`promised_on`** — the date promised to the *client*. Within 5 days → **Due soon**.
+- **`next_check_on`** — optional manual "look at this again on" date; on/after it → Due soon.
+- **Sample fields** (`kind = 'sample'` only): `sample_billed_usd`, `mold_fee_refundable`, and for
+  samples loaned to a client, `return_by` + `returned` — an unreturned sample past `return_by`
+  is flagged even after it's delivered.
+- `factory` is free text — use the supplier code/short name already used in the supplier folders.
+- Closing out: set `stage` to `delivered` (or `cancelled`) rather than deleting.
+
+The only in-app write is the **Log update** button on your own rows (stamps today + a note).
+Everything else is added/edited from chat:
+
+```bash
+curl -s -X POST "$SUPABASE_URL/rest/v1/orders" \
+  -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"owner_id": "<id>", "client": "...", "reference": "SI00xxxx", "item": "...",
+       "kind": "bulk", "factory": "...", "stage": "production", "promised_on": "YYYY-MM-DD",
+       "last_update_on": "YYYY-MM-DD", "last_update": "..."}'
+```
+
+### The sweep (run on request: "run the sweep")
+
+1. Load every row that isn't `delivered`/`cancelled` (plus delivered samples with `returned =
+   false`).
+2. For each, search Gmail **read-only** (`search_threads` / `get_thread` only — never send,
+   draft, or label) for threads with that factory or client since `last_update_on`. If the
+   factory sent a real update, PATCH `last_update_on` + `last_update`. Much factory contact is on
+   WhatsApp and won't show up — ask rather than assume nothing happened.
+3. Report back as a short list: every row that's still **Needs chase** (client, item, why,
+   who to chase), then **Due soon**. Don't overwrite `daily_musts` unless asked — offer to put
+   the top two chases into slots 2/3.
+
 ## Team / org chart
 
 Table `public.team_members` holds the company org chart, rendered read-only on the web app's
