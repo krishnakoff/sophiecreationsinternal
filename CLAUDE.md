@@ -416,7 +416,8 @@ text, not a status dump. Everything here is **read-only** on mail and chat: Gmai
    factory sent a real update on an order row, PATCH `last_update_on` + `last_update`.
 3. **WhatsApp Web** (work chats with MBM and internal), only if a browser tool is connected
    this session — read-only, never type into a chat or send. If it isn't connected, say so.
-4. **CRM**: leads whose `next_action_date` is today or past.
+4. **CRM**: leads whose `next_action_date` is today or past. **Cash**: `cash_items` overdue or due
+   within 7 days, expected money in, and the cash position (see the Cash section).
 5. **Ask, don't assume**: factory contact is on WeChat (and WhatsApp), which Claude can't see.
    For each Needs chase row, ask one short question ("Anything from Sunrise on Magic Numbers?")
    and PATCH the row from his answer.
@@ -432,6 +433,44 @@ text, not a status dump. Everything here is **read-only** on mail and chat: Gmai
 **Evening check-in** ("evening sweep"): same steps 1–2 but only since the morning run, then
 ask what moved on WeChat/WhatsApp during the day, PATCH the order rows, and hand back what's
 still open for tomorrow morning.
+
+## Cash (payables, receivables, client money held)
+
+Liquidity is tight, so every committed payment is tracked until it's paid. Table
+`public.cash_items`, rendered on the web app's **Cash** tab (realtime-enabled, company-wide like
+`orders`; write with the chatting person's `owner_id`). Krishna doesn't edit it himself: he says
+"paid X" / "rent is 3k on the 10th" in chat and you PATCH/POST.
+
+- **`direction`**: `out` (we owe it), `in` (we're expecting it), `held` (a client prepayment we hold
+  and owe back in goods — e.g. Eternity's 15k, Chandra's prepayment, the unapplied part of the MBM
+  advance). Spending `held` money on other bills is how outflow outruns inflow, so keep it visible.
+- **`category`**: `goods` (factory payment — usually blocks a shipment), `shipping`, `tax_legal`,
+  `fixed` (rent, utilities, card), `staff`, `director`, `bank`, `client` (for in/held rows), `other`.
+- **`amount_usd`** (USD; null = amount not known yet, shown as TBD), **`due_on`** (null = no date).
+- **`status`**: `planned` → `approved` (decided to pay from a specific pot) → `paid` (+ `paid_on`).
+  For `in` rows `paid` means received; for `held` rows it means the goods were delivered.
+  `deferred` = parked on purpose (e.g. Krishna's commission, Chandra's factory deposit pending the
+  loan). `cancelled` rather than deleting.
+- **`funded_by`**: which pot pays it ("MBM advance (25k)", "Eternity prepayment (held)", "Client
+  already paid us"). **`reference`**: SI/SO numbers.
+- Rent is ~USD 3k, due on the **10th of every month** — when one is marked paid, add next month's row.
+
+Table `public.cash_accounts` holds the latest balance per bank account (`account`, `balance_usd`,
+`as_of`). Cash on hand on the tab is their sum, so update it whenever a balance is given.
+
+```bash
+curl -s -X POST "$SUPABASE_URL/rest/v1/cash_items" \
+  -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"owner_id": "<id>", "direction": "out", "counterparty": "...", "description": "...",
+       "category": "goods", "amount_usd": 2500, "due_on": "YYYY-MM-DD", "status": "planned",
+       "funded_by": "", "reference": "", "notes": ""}'
+```
+
+The sweep includes a **cash line**: anything overdue or due in the next 7 days (goods-blocking
+first), expected money in, and the position (cash on hand + expected in − unpaid out). Ignore
+ShipAny reminders. When an email shows a payment landed (Airwallex/DBS notices) or went out, PATCH
+the matching row to `paid`.
 
 ## Team / org chart
 

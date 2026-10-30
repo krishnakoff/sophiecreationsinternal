@@ -28,6 +28,8 @@ let outlineNodes = [];
 let dailyMusts = [];
 let teamMembers = [];
 let orders = [];
+let cashItems = [];
+let cashAccounts = [];
 let realtimeReady = false;
 let viewingOwnerId = null;
 
@@ -123,7 +125,7 @@ if (lastTab && document.getElementById("view-" + lastTab)) switchTab(lastTab);
 
 // ---------- data + realtime ----------
 async function loadAll() {
-  await Promise.all([loadLeads(), loadOutline(), loadOutboundStats(), loadMusts(), loadTeam(), loadOrders()]);
+  await Promise.all([loadLeads(), loadOutline(), loadOutboundStats(), loadMusts(), loadTeam(), loadOrders(), loadCash()]);
   subscribeRealtime();
 }
 
@@ -155,6 +157,10 @@ function subscribeRealtime() {
     .subscribe();
   sb.channel("public:orders")
     .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, loadOrders)
+    .subscribe();
+  sb.channel("public:cash")
+    .on("postgres_changes", { event: "*", schema: "public", table: "cash_items" }, loadCash)
+    .on("postgres_changes", { event: "*", schema: "public", table: "cash_accounts" }, loadCash)
     .subscribe();
 }
 
@@ -546,6 +552,214 @@ async function logOrderUpdate(id) {
   const { error } = await sb.from("orders").update({ last_update_on: hkDateToday(), last_update: text.trim() }).eq("id", id);
   if (error) { console.error("logOrderUpdate:", error.message); alert("Couldn't save: " + error.message); return; }
   loadOrders();
+}
+
+// ---------- Cash (what's due, what's coming in, client money held) ----------
+// Company-wide like Orders. Liquidity is tight, so every committed payment sits here until it's
+// paid: direction "out" is owed, "in" is expected, "held" is a client prepayment we owe back in
+// goods. Rows are added and edited from chat (see CLAUDE.md); the only in-app write is marking
+// one of your own rows paid / received / delivered.
+const CASH_CATEGORIES = {
+  goods: "Goods", shipping: "Shipping", tax_legal: "Tax / legal", fixed: "Fixed", staff: "Staff",
+  director: "Director", bank: "Bank", client: "Client", other: "Other"
+};
+const CASH_STATUS_LABEL = {
+  out: { planned: "Planned", approved: "Approved", paid: "Paid", deferred: "Deferred", cancelled: "Cancelled" },
+  in: { planned: "Expected", approved: "Confirmed", paid: "Received", deferred: "Deferred", cancelled: "Cancelled" },
+  held: { planned: "Owed in goods", approved: "Owed in goods", paid: "Delivered", deferred: "Deferred", cancelled: "Cancelled" }
+};
+const CASH_WEEKS = 12;
+let cashFilter = null;
+
+async function loadCash() {
+  const [items, accounts] = await Promise.all([
+    sb.from("cash_items").select("*").order("due_on", { nullsFirst: false }),
+    sb.from("cash_accounts").select("*").order("account")
+  ]);
+  if (items.error) console.error("loadCash items:", items.error.message);
+  if (accounts.error) console.error("loadCash accounts:", accounts.error.message);
+  cashItems = items.data || [];
+  cashAccounts = accounts.data || [];
+  renderCash();
+}
+
+function fmtUSD(n) {
+  if (n === null || n === undefined || n === "") return "TBD";
+  const v = Number(n);
+  const abs = Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: v % 1 ? 2 : 0, maximumFractionDigits: 2 });
+  return (v < 0 ? "−$" : "$") + abs;
+}
+
+const isOpen = c => !["paid", "cancelled", "deferred"].includes(c.status);
+
+// Which bucket a row falls in, for the summary cards and the table filter.
+function cashBucket(c, today) {
+  if (c.status === "cancelled") return "cancelled";
+  if (c.status === "paid") return "paid";
+  if (c.status === "deferred") return "deferred";
+  if (c.direction === "held") return "held";
+  if (c.direction === "in") return "in";
+  if (!c.due_on) return "later";
+  const diff = daysDiff(parseDate(c.due_on), today);
+  if (diff < 0) return "overdue";
+  if (diff <= 7) return "week";
+  return "later";
+}
+
+function renderCash() {
+  const today = new Date();
+  const sum = list => list.reduce((t, c) => t + Number(c.amount_usd || 0), 0);
+  const noAmount = list => list.filter(c => c.amount_usd === null).length;
+  const buckets = {};
+  cashItems.forEach(c => { const b = cashBucket(c, today); (buckets[b] = buckets[b] || []).push(c); });
+  const get = k => buckets[k] || [];
+  const paid30 = get("paid").filter(c => c.paid_on && daysDiff(today, parseDate(c.paid_on)) <= 30);
+
+  const cashOnHand = sum(cashAccounts.map(a => ({ amount_usd: a.balance_usd })));
+  const openOut = cashItems.filter(c => c.direction === "out" && isOpen(c));
+  const openIn = cashItems.filter(c => c.direction === "in" && isOpen(c));
+  const position = cashOnHand + sum(openIn) - sum(openOut);
+
+  document.getElementById("cash-subtitle").textContent =
+    "Cash — what's due, what's coming in, and client money held, as of " +
+    today.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+
+  const cardSpecs = [
+    { key: "overdue", list: get("overdue"), label: "Overdue", cls: "c-garnet" },
+    { key: "week", list: get("week"), label: "Due in 7 days", cls: "c-amber" },
+    { key: "later", list: get("later"), label: "Later / no date", cls: "" },
+    { key: "in", list: get("in"), label: "Expected in", cls: "c-emerald" },
+    { key: "held", list: get("held"), label: "Client money held", cls: "c-accent" },
+    { key: "deferred", list: get("deferred"), label: "Deferred", cls: "" },
+    { key: "paid", list: paid30, label: "Paid (30 days)", cls: "c-sapphire" }
+  ];
+  document.getElementById("cash-cards").innerHTML = cardSpecs.map(c => `
+    <div class="card ${c.cls} ${cashFilter === c.key ? "card-active" : ""}" data-key="${c.key}">
+      <div class="num">${fmtUSD(sum(c.list))}</div>
+      <div class="label">${c.label} · ${c.list.length}${noAmount(c.list) ? ` (${noAmount(c.list)} TBD)` : ""}</div>
+    </div>
+  `).join("");
+  document.querySelectorAll("#cash-cards .card").forEach(card => {
+    card.addEventListener("click", () => {
+      cashFilter = cashFilter === card.dataset.key ? null : card.dataset.key;
+      renderCash();
+    });
+  });
+
+  const balanceNote = cashAccounts.length
+    ? cashAccounts.map(a => `${escapeHtml(a.account)} ${fmtUSD(a.balance_usd)} (${escapeHtml(fmtDate(parseDate(a.as_of)))})`).join(" · ")
+    : "No bank balances logged yet — tell Claude the Airwallex / DBS balances.";
+  document.getElementById("cash-position").innerHTML = `
+    <div class="cash-equation">
+      <span><span class="muted">Cash on hand</span> <b>${cashAccounts.length ? fmtUSD(cashOnHand) : "?"}</b></span>
+      <span class="op">+</span>
+      <span><span class="muted">Expected in</span> <b>${fmtUSD(sum(openIn))}</b></span>
+      <span class="op">−</span>
+      <span><span class="muted">Unpaid out</span> <b>${fmtUSD(sum(openOut))}</b></span>
+      <span class="op">=</span>
+      <span class="${position < 0 ? "short" : "ok"}"><b>${fmtUSD(position)}</b> ${position < 0 ? "short" : "spare"}</span>
+    </div>
+    <div class="cash-balances muted">${balanceNote}${noAmount(openOut) ? ` · ${noAmount(openOut)} unpaid item(s) have no amount yet` : ""}</div>
+  `;
+
+  renderCashOutlook(today, cashOnHand);
+
+  const wrap = document.getElementById("cash-table-wrap");
+  const defaultKeys = ["overdue", "week", "later"];
+  const visible = cashItems.filter(c => {
+    const b = cashBucket(c, today);
+    if (cashFilter === "paid") return paid30.includes(c);
+    return cashFilter ? b === cashFilter : defaultKeys.includes(b);
+  });
+  const rank = { overdue: 0, week: 1, later: 2 };
+  visible.sort((a, b) => (rank[cashBucket(a, today)] ?? 3) - (rank[cashBucket(b, today)] ?? 3)
+    || (a.due_on || "9999").localeCompare(b.due_on || "9999")
+    || Number(b.amount_usd || 0) - Number(a.amount_usd || 0));
+  if (!visible.length) {
+    wrap.innerHTML = `<div class="empty-state">${cashItems.length ? "Nothing here." : "No payments tracked yet."}</div>`;
+    return;
+  }
+
+  const rows = visible.map(c => {
+    const b = cashBucket(c, today);
+    let due = '<span class="muted">&mdash;</span>';
+    if (c.due_on) {
+      const diff = daysDiff(parseDate(c.due_on), today);
+      const rel = c.status === "paid" ? "" : diff < 0 ? `${-diff}d overdue` : diff === 0 ? "today" : `in ${diff}d`;
+      due = `<span class="order-date">${escapeHtml(fmtDate(parseDate(c.due_on)))}</span>${rel ? `<div class="cash-rel ${diff < 0 ? "flag-chase" : diff <= 7 ? "flag-soon" : "muted"}">${rel}</div>` : ""}`;
+    }
+    const doneLabel = { out: "Mark paid", in: "Mark received", held: "Mark delivered" }[c.direction];
+    const canMark = c.owner_id === session.user.id && !["paid", "cancelled"].includes(c.status);
+    return `
+    <tr class="cash-row cash-${b}">
+      <td class="company">${escapeHtml(c.counterparty)}
+        ${c.description ? `<div class="order-item">${escapeHtml(c.description)}</div>` : ""}
+        ${c.reference ? `<div class="order-ref">${escapeHtml(c.reference)}</div>` : ""}
+      </td>
+      <td><span class="pill pill-cash-cat">${escapeHtml(CASH_CATEGORIES[c.category] || c.category)}</span></td>
+      <td class="cash-amount ${c.direction === "in" ? "cash-in" : ""}">${c.direction === "in" ? "+" : ""}${fmtUSD(c.amount_usd)}</td>
+      <td>${due}</td>
+      <td><span class="pill pill-cash-${c.status}">${escapeHtml(CASH_STATUS_LABEL[c.direction][c.status] || c.status)}</span>
+        ${c.paid_on ? `<div class="cash-rel muted">${escapeHtml(fmtDate(parseDate(c.paid_on)))}</div>` : ""}</td>
+      <td class="muted cash-funded">${escapeHtml(c.funded_by) || "&mdash;"}</td>
+      <td>${c.notes ? `<div class="notes-cell">${escapeHtml(c.notes)}</div>` : ""}</td>
+      <td>${canMark ? `<button type="button" class="log-update-btn cash-mark-btn" data-id="${c.id}">${doneLabel}</button>` : ""}</td>
+    </tr>`;
+  }).join("");
+  wrap.innerHTML = `
+    <div class="table-scroll">
+    <table>
+      <thead><tr><th>Who / what</th><th>Category</th><th class="cash-amount">Amount</th><th>Due</th><th>Status</th><th>Funded by</th><th>Notes</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    </div>
+  `;
+  wrap.querySelectorAll(".cash-mark-btn").forEach(btn => btn.addEventListener("click", () => markCashDone(btn.dataset.id)));
+}
+
+// Week-by-week outlook: overdue and undated open items land in "Now"; each column is a Mon-Sun
+// week. Closing balance starts from cash on hand, so the first negative column is the crunch.
+function renderCashOutlook(today, cashOnHand) {
+  const el = document.getElementById("cash-outlook");
+  const monday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - ((today.getDay() + 6) % 7));
+  const cols = [{ label: "Now", inn: 0, out: 0 }];
+  for (let w = 0; w < CASH_WEEKS; w++) {
+    const start = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + w * 7);
+    cols.push({ label: start.toLocaleDateString(undefined, { month: "short", day: "numeric" }), start, inn: 0, out: 0 });
+  }
+  cashItems.filter(c => c.direction !== "held" && isOpen(c) && c.amount_usd !== null).forEach(c => {
+    let idx = 0;
+    if (c.due_on) {
+      const due = parseDate(c.due_on);
+      if (daysDiff(due, today) >= 0) {
+        idx = Math.floor(daysDiff(due, monday) / 7) + 1;
+        if (idx > CASH_WEEKS) return; // beyond the window
+      }
+    }
+    cols[idx][c.direction === "in" ? "inn" : "out"] += Number(c.amount_usd);
+  });
+  let bal = cashOnHand;
+  cols.forEach(col => { bal += col.inn - col.out; col.close = bal; });
+  const cell = v => v ? fmtUSD(v) : '<span class="muted">&mdash;</span>';
+  el.innerHTML = `
+    <div class="cash-outlook-title">Week-by-week ${cashAccounts.length ? "" : '<span class="muted">(starting from $0 until bank balances are logged)</span>'}</div>
+    <div class="table-scroll cash-outlook">
+    <table>
+      <thead><tr><th></th>${cols.map(c => `<th>${escapeHtml(c.label)}</th>`).join("")}</tr></thead>
+      <tbody>
+        <tr><td class="muted">In</td>${cols.map(c => `<td class="cash-in">${cell(c.inn)}</td>`).join("")}</tr>
+        <tr><td class="muted">Out</td>${cols.map(c => `<td>${cell(c.out)}</td>`).join("")}</tr>
+        <tr class="cash-close"><td>Balance</td>${cols.map(c => `<td class="${c.close < 0 ? "short" : ""}">${fmtUSD(c.close)}</td>`).join("")}</tr>
+      </tbody>
+    </table>
+    </div>
+  `;
+}
+
+async function markCashDone(id) {
+  const { error } = await sb.from("cash_items").update({ status: "paid", paid_on: hkDateToday() }).eq("id", id);
+  if (error) { console.error("markCashDone:", error.message); alert("Couldn't save: " + error.message); return; }
+  loadCash();
 }
 
 // ---------- 3 Musts Today ----------
