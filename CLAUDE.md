@@ -401,17 +401,37 @@ curl -s -X POST "$SUPABASE_URL/rest/v1/orders" \
        "last_update_on": "YYYY-MM-DD", "last_update": "..."}'
 ```
 
-### The sweep (run on request: "run the sweep")
+### The sweep (run on request: "run the sweep" / "what are my to-dos today")
 
-1. Load every row that isn't `delivered`/`cancelled` (plus delivered samples with `returned =
-   false`).
-2. For each, search Gmail **read-only** (`search_threads` / `get_thread` only — never send,
-   draft, or label) for threads with that factory or client since `last_update_on`. If the
-   factory sent a real update, PATCH `last_update_on` + `last_update`. Much factory contact is on
-   WhatsApp and won't show up — ask rather than assume nothing happened.
-3. Report back as a short list: every row that's still **Needs chase** (client, item, why,
-   who to chase), then **Due soon**. Don't overwrite `daily_musts` unless asked — offer to put
-   the top two chases into slots 2/3.
+Krishna rarely opens the Orders tab himself — the sweep *is* how he sees it. His to-do list
+lives in iCloud Notes (phone, offline), so the output is a ranked action list plus paste-ready
+text, not a status dump. Everything here is **read-only** on mail and chat: Gmail
+`search_threads` / `get_thread` / `get_message` only — never send, draft, label, or trash.
+
+1. **Orders tab**: load every row that isn't `delivered`/`cancelled` (plus delivered samples
+   with `returned = false`), and work out which are Needs chase / Due soon.
+2. **All mail, last 72 hours** (`after:YYYY/MM/DD`, no `in:` restriction, skip promotions/social
+   and DMARC/newsletter noise): payments in and out, client replies or chases, factory updates,
+   meeting-notes bots (Gemini/Apollo summaries carry real action items), staff invoices. If a
+   factory sent a real update on an order row, PATCH `last_update_on` + `last_update`.
+3. **WhatsApp Web** (work chats with MBM and internal), only if a browser tool is connected
+   this session — read-only, never type into a chat or send. If it isn't connected, say so.
+4. **CRM**: leads whose `next_action_date` is today or past.
+5. **Ask, don't assume**: factory contact is on WeChat (and WhatsApp), which Claude can't see.
+   For each Needs chase row, ask one short question ("Anything from Sunrise on Magic Numbers?")
+   and PATCH the row from his answer.
+6. **Report**, in this order:
+   - **Top 5 today**, ranked: (1) money that unblocks production or a receivable you can
+     collect, (2) clients waiting on him, (3) overdue factory chases, (4) new pipeline,
+     (5) everything else. One line each, with *why* it's ranked there.
+   - The factory questions from step 5.
+   - A paste-ready **TODAY** block in his iCloud Notes outline format, plus any line-level edits
+     to the rest of the note (only what changed).
+   Don't overwrite `daily_musts` unless asked — offer to put the top two into slots 2/3.
+
+**Evening check-in** ("evening sweep"): same steps 1–2 but only since the morning run, then
+ask what moved on WeChat/WhatsApp during the day, PATCH the order rows, and hand back what's
+still open for tomorrow morning.
 
 ## Team / org chart
 
