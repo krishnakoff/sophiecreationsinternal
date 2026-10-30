@@ -413,7 +413,10 @@ text, not a status dump. Everything here is **read-only** on mail and chat: Gmai
 2. **All mail, last 72 hours** (`after:YYYY/MM/DD`, no `in:` restriction, skip promotions/social
    and DMARC/newsletter noise): payments in and out, client replies or chases, factory updates,
    meeting-notes bots (Gemini/Apollo summaries carry real action items), staff invoices. If a
-   factory sent a real update on an order row, PATCH `last_update_on` + `last_update`.
+   factory sent a real update on an order row, PATCH `last_update_on` + `last_update`. If a
+   deposit notice (Airwallex/DBS) or payment confirmation matches a `cash_items` row, mark it
+   `paid` with `paid_on`; a new bill or invoice with no row gets one (`planned`). Before flagging
+   "reply to X", check Sent — he may already have replied.
 3. **WhatsApp Web** (work chats with MBM and internal), only if a browser tool is connected
    this session — read-only, never type into a chat or send. If it isn't connected, say so.
 4. **CRM**: leads whose `next_action_date` is today or past. **Cash**: `cash_items` overdue or due
@@ -424,15 +427,25 @@ text, not a status dump. Everything here is **read-only** on mail and chat: Gmai
 6. **Report**, in this order:
    - **Top 5 today**, ranked: (1) money that unblocks production or a receivable you can
      collect, (2) clients waiting on him, (3) overdue factory chases, (4) new pipeline,
-     (5) everything else. One line each, with *why* it's ranked there.
+     (5) everything else. One line each, with *why* it's ranked there. Never rank a payment
+     without checking it against cash on hand — if paying it would push the position further
+     short, say so and suggest what to defer or which receivable to chase first.
+   - **Cash** (3–5 lines): cash on hand (and how old that balance is), anything overdue or due in
+     the next 7 days with goods-blocking items first, expected money in, the position
+     (cash + expected in − unpaid out), and any receivable that can be invoiced or chased today
+     (e.g. goods shipped with no invoice). Note if client money (`held`) is being used to cover
+     other bills. Ignore ShipAny.
    - The factory questions from step 5.
    - A paste-ready **TODAY** block in his iCloud Notes outline format, plus any line-level edits
      to the rest of the note (only what changed).
    Don't overwrite `daily_musts` unless asked — offer to put the top two into slots 2/3.
 
-**Evening check-in** ("evening sweep"): same steps 1–2 but only since the morning run, then
-ask what moved on WeChat/WhatsApp during the day, PATCH the order rows, and hand back what's
-still open for tomorrow morning.
+**Evening check-in** ("evening sweep"): same steps 1–2 but only since the morning run, then ask
+two things: what moved on WeChat/WhatsApp during the day (PATCH the order rows), and **what got
+paid or received today** — mark those `cash_items` `paid`, and ask for the current Airwallex
+balance to update `cash_accounts` (it counts as all the cash). When rent is marked paid, add next
+month's row (10th, ~USD 3k). Hand back what's still open for tomorrow morning, including tomorrow's
+cash due and the updated position.
 
 ## Cash (payables, receivables, client money held)
 
@@ -457,6 +470,7 @@ Liquidity is tight, so every committed payment is tracked until it's paid. Table
 
 Table `public.cash_accounts` holds the latest balance per bank account (`account`, `balance_usd`,
 `as_of`). Cash on hand on the tab is their sum, so update it whenever a balance is given.
+Krishna counts **Airwallex as all the cash** (USD + HKD at 7.78) — don't add DBS unless told.
 
 ```bash
 curl -s -X POST "$SUPABASE_URL/rest/v1/cash_items" \
