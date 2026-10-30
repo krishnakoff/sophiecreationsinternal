@@ -195,6 +195,45 @@ create table if not exists public.orders (
   updated_at timestamptz not null default now()
 );
 
+-- ---------- cash (payables / receivables / client money, rendered on the Cash tab) ----------
+-- Liquidity is tight, so every committed payment is tracked until it's paid. One row per expected
+-- movement of money: direction 'out' (we owe it), 'in' (we're expecting it), or 'held' (a client
+-- prepayment we hold and owe back in goods — spending it on other bills is how outflow quietly
+-- outruns inflow). Company-wide like orders. Amounts are in USD; amount_usd may be null when the
+-- figure isn't known yet. status: planned -> approved -> paid ('paid' means received for 'in'
+-- rows, and goods delivered for 'held' rows); 'deferred' parks a payment on purpose.
+create table if not exists public.cash_items (
+  id uuid primary key default gen_random_uuid(),
+  owner_id uuid not null references auth.users(id) default auth.uid(),
+  direction text not null default 'out' check (direction in ('out', 'in', 'held')),
+  counterparty text not null,
+  description text default '',
+  category text not null default 'other'
+    check (category in ('goods', 'shipping', 'tax_legal', 'fixed', 'staff', 'director', 'bank', 'client', 'other')),
+  amount_usd numeric(12, 2),
+  due_on date,
+  status text not null default 'planned'
+    check (status in ('planned', 'approved', 'paid', 'deferred', 'cancelled')),
+  paid_on date,
+  funded_by text default '',
+  reference text default '',
+  notes text default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- Latest known balance per bank account; cash on hand on the Cash tab is the sum of these.
+create table if not exists public.cash_accounts (
+  id uuid primary key default gen_random_uuid(),
+  owner_id uuid not null references auth.users(id) default auth.uid(),
+  account text not null,
+  balance_usd numeric(12, 2) not null default 0,
+  as_of date not null default current_date,
+  notes text default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 -- ---------- keep updated_at fresh ----------
 create or replace function public.touch_updated_at()
 returns trigger language plpgsql as $$
@@ -228,6 +267,14 @@ drop trigger if exists orders_touch_updated_at on public.orders;
 create trigger orders_touch_updated_at before update on public.orders
   for each row execute function public.touch_updated_at();
 
+drop trigger if exists cash_items_touch_updated_at on public.cash_items;
+create trigger cash_items_touch_updated_at before update on public.cash_items
+  for each row execute function public.touch_updated_at();
+
+drop trigger if exists cash_accounts_touch_updated_at on public.cash_accounts;
+create trigger cash_accounts_touch_updated_at before update on public.cash_accounts
+  for each row execute function public.touch_updated_at();
+
 -- ---------- row level security: everyone signed in can read everything; you can only write your own rows ----------
 alter table public.leads enable row level security;
 alter table public.todo_items enable row level security;
@@ -237,6 +284,8 @@ alter table public.daily_musts enable row level security;
 alter table public.candidates enable row level security;
 alter table public.team_members enable row level security;
 alter table public.orders enable row level security;
+alter table public.cash_items enable row level security;
+alter table public.cash_accounts enable row level security;
 
 drop policy if exists "authenticated full access" on public.leads;
 drop policy if exists "authenticated read all" on public.leads;
@@ -344,6 +393,32 @@ create policy "authenticated update own" on public.orders
 create policy "authenticated delete own" on public.orders
   for delete using (auth.uid() = owner_id);
 
+drop policy if exists "authenticated read all" on public.cash_items;
+drop policy if exists "authenticated insert own" on public.cash_items;
+drop policy if exists "authenticated update own" on public.cash_items;
+drop policy if exists "authenticated delete own" on public.cash_items;
+create policy "authenticated read all" on public.cash_items
+  for select using (auth.role() = 'authenticated');
+create policy "authenticated insert own" on public.cash_items
+  for insert with check (auth.uid() = owner_id);
+create policy "authenticated update own" on public.cash_items
+  for update using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+create policy "authenticated delete own" on public.cash_items
+  for delete using (auth.uid() = owner_id);
+
+drop policy if exists "authenticated read all" on public.cash_accounts;
+drop policy if exists "authenticated insert own" on public.cash_accounts;
+drop policy if exists "authenticated update own" on public.cash_accounts;
+drop policy if exists "authenticated delete own" on public.cash_accounts;
+create policy "authenticated read all" on public.cash_accounts
+  for select using (auth.role() = 'authenticated');
+create policy "authenticated insert own" on public.cash_accounts
+  for insert with check (auth.uid() = owner_id);
+create policy "authenticated update own" on public.cash_accounts
+  for update using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+create policy "authenticated delete own" on public.cash_accounts
+  for delete using (auth.uid() = owner_id);
+
 -- ---------- Data API grants ----------
 -- From 30 Oct 2026 Supabase no longer auto-grants API access to NEW tables in "public": a table
 -- without an explicit grant returns "permission denied" to supabase-js / PostgREST. Tables that
@@ -352,7 +427,8 @@ create policy "authenticated delete own" on public.orders
 -- not granted: the app requires sign-in, and RLS policies above only admit authenticated users.
 grant select, insert, update, delete on
   public.leads, public.outbound_emails, public.todo_items, public.todo_outline,
-  public.daily_musts, public.candidates, public.team_members, public.orders
+  public.daily_musts, public.candidates, public.team_members, public.orders,
+  public.cash_items, public.cash_accounts
   to authenticated, service_role;
 
 create index if not exists leads_owner_id_idx on public.leads(owner_id);
@@ -367,6 +443,7 @@ create index if not exists candidates_role_idx on public.candidates(role);
 create index if not exists candidates_emails_idx on public.candidates using gin (emails);
 create index if not exists team_members_reports_to_idx on public.team_members(reports_to);
 create index if not exists orders_stage_idx on public.orders(stage);
+create index if not exists cash_items_status_due_idx on public.cash_items(status, due_on);
 
 -- ---------- realtime: push live changes to every connected browser ----------
 alter publication supabase_realtime add table public.leads;
@@ -376,6 +453,8 @@ alter publication supabase_realtime add table public.todo_outline;
 alter publication supabase_realtime add table public.daily_musts;
 alter publication supabase_realtime add table public.team_members;
 alter publication supabase_realtime add table public.orders;
+alter publication supabase_realtime add table public.cash_items;
+alter publication supabase_realtime add table public.cash_accounts;
 
 -- ---------- seed the 30 priority items (safe to run once; skipped if already seeded) ----------
 -- Requires the admin account (Sanjay) to already exist (Authentication -> Users -> Add user, email sanjay@sophiecreations.net).

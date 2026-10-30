@@ -253,6 +253,35 @@ tbody tr:hover td{ background:var(--panel-2); }
 }
 .log-update-btn:hover{ color:var(--accent); border-color:var(--accent); }
 
+/* ---------- Cash (what's due / coming in / client money held) ---------- */
+.cash-cards{ grid-template-columns:repeat(7,1fr); margin-bottom:14px; }
+.cash-cards .num{ font-size:18px; }
+.cash-position{ background:var(--panel); border:1px solid var(--hairline); border-radius:10px; padding:12px 16px; margin-bottom:18px; }
+.cash-equation{ display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 12px; font-size:14px; }
+.cash-equation b{ font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-weight:600; }
+.cash-equation .op{ color:var(--muted-2); font-family:var(--font-mono); }
+.cash-equation .short, .cash-close td.short{ color:var(--garnet); }
+.cash-equation .ok{ color:var(--emerald); }
+.cash-balances{ font-size:12px; margin-top:5px; }
+.cash-outlook-title{ font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:var(--accent); margin-bottom:8px; }
+.cash-outlook{ margin-bottom:22px; }
+.cash-outlook table{ min-width:980px; font-size:12.5px; }
+.cash-outlook th, .cash-outlook td{ padding:8px 10px; text-align:right; white-space:nowrap; font-family:var(--font-mono); font-variant-numeric:tabular-nums; }
+.cash-outlook th:first-child, .cash-outlook td:first-child{ text-align:left; font-family:var(--font-body); }
+.cash-close td{ font-weight:600; border-top:1px solid var(--hairline); }
+.cash-amount{ text-align:right; font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-weight:600; white-space:nowrap; }
+th.cash-amount{ font-family:var(--font-body); }
+.cash-in{ color:var(--emerald); }
+.cash-rel{ font-size:11.5px; font-weight:600; margin-top:2px; }
+.cash-funded{ font-size:12.5px; max-width:160px; }
+.cash-overdue td:first-child{ box-shadow:inset 3px 0 0 var(--garnet); }
+.cash-week td:first-child{ box-shadow:inset 3px 0 0 var(--amber); }
+.pill-cash-cat{ background:var(--panel-2); color:var(--muted); }
+.pill-cash-planned{ background:transparent; border:1px solid var(--muted-2); color:var(--muted); }
+.pill-cash-approved{ background:var(--amber-tint); color:var(--amber); }
+.pill-cash-paid{ background:var(--emerald-tint); color:var(--emerald); }
+.pill-cash-deferred, .pill-cash-cancelled{ background:var(--panel-2); color:var(--muted); }
+
 /* ---------- Team org chart ---------- */
 /* Classic connector-line tree: each <li> draws the half-lines above itself (::before/::after) and
    each nested <ul> draws the stem down from its parent card. Collapses to an indented list on
@@ -296,7 +325,7 @@ tbody tr:hover td{ background:var(--panel-2); }
   .org-card{ width:auto; max-width:360px; text-align:left; }
 }
 
-@media (max-width:820px){ .cards{ grid-template-columns:repeat(4,1fr); } .orders-cards{ grid-template-columns:repeat(3,1fr); } }
+@media (max-width:820px){ .cards{ grid-template-columns:repeat(4,1fr); } .orders-cards{ grid-template-columns:repeat(3,1fr); } .cash-cards{ grid-template-columns:repeat(4,1fr); } }
 /* Four tabs plus the owner switch don't fit one phone-width row: let the right side wrap and the
    tab strip scroll on its own instead of widening the whole page. */
 @media (max-width:600px){
@@ -305,5 +334,5 @@ tbody tr:hover td{ background:var(--panel-2); }
   nav.tabs{ overflow-x:auto; max-width:100%; }
   nav.tabs button{ white-space:nowrap; padding:7px 11px; }
 }
-@media (max-width:480px){ .cards, .orders-cards{ grid-template-columns:repeat(2,1fr); } }
+@media (max-width:480px){ .cards, .orders-cards, .cash-cards{ grid-template-columns:repeat(2,1fr); } }
 @media (prefers-reduced-motion: reduce){ *{ transition:none !important; } }
