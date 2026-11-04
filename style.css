@@ -341,3 +341,12 @@ th.cash-amount{ font-family:var(--font-body); }
 .completed-orders{margin-top:28px}
 .completed-orders > summary{cursor:pointer;font-weight:600;font-size:15px;padding:8px 0;color:inherit;list-style:revert}
 .completed-orders .order-row{opacity:.8}
+
+/* B2C stage pills (stage names mirror the B2C Lead Management Sheet) */
+.pill-b2c-story{ background:var(--garnet-tint, var(--panel-2)); color:var(--garnet); }
+.pill-b2c-design_pricing{ background:var(--accent-tint); color:var(--accent); }
+.pill-b2c-in_production{ background:var(--amber-tint); color:var(--amber); }
+.pill-b2c-ready_to_ship, .pill-b2c-in_transit{ background:var(--sapphire-tint); color:var(--sapphire); }
+.pill-b2c-delivered{ background:var(--garnet-tint, var(--panel-2)); color:var(--garnet); }
+.pill-b2c-sai_ram{ background:var(--emerald-tint); color:var(--emerald); }
+.pill-b2c-on_hold, .pill-b2c-cancelled{ background:var(--panel-2); color:var(--muted); }

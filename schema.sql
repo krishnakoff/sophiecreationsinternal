@@ -234,6 +234,39 @@ create table if not exists public.cash_accounts (
   updated_at timestamptz not null default now()
 );
 
+-- B2C orders: private-client deals being pushed toward "Sai Ram" (delivered AND paid).
+-- Stages mirror the B2C Lead Management Sheet's CRM Stage column. The sheet stays the ledger
+-- (revenue, cost, commission); this table is the action layer: who it's waiting on, the next
+-- action, and what's still owed.
+create table if not exists public.b2c_orders (
+  id uuid primary key default gen_random_uuid(),
+  owner_id uuid not null references auth.users(id) default auth.uid(),
+  salesperson text not null default '',
+  client text not null,
+  contact text default '',
+  item text not null default '',
+  reference text default '',
+  source text default '',
+  stage text not null default 'design_pricing'
+    check (stage in ('story', 'design_pricing', 'in_production', 'ready_to_ship', 'in_transit',
+                     'delivered', 'sai_ram', 'on_hold', 'cancelled')),
+  waiting_on text check (waiting_on in ('client', 'salesperson', 'factory', 'us')),
+  currency text not null default 'USD' check (currency in ('USD', 'HKD')),
+  invoice_amount numeric(12, 2),
+  deposit_amount numeric(12, 2),
+  deposit_on date,
+  balance_due numeric(12, 2),
+  balance_received_on date,
+  promised_on date,
+  next_action text default '',
+  next_action_on date,
+  last_update_on date,
+  last_update text default '',
+  notes text default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 -- ---------- keep updated_at fresh ----------
 create or replace function public.touch_updated_at()
 returns trigger language plpgsql as $$
@@ -275,6 +308,10 @@ drop trigger if exists cash_accounts_touch_updated_at on public.cash_accounts;
 create trigger cash_accounts_touch_updated_at before update on public.cash_accounts
   for each row execute function public.touch_updated_at();
 
+drop trigger if exists b2c_orders_touch_updated_at on public.b2c_orders;
+create trigger b2c_orders_touch_updated_at before update on public.b2c_orders
+  for each row execute function public.touch_updated_at();
+
 -- ---------- row level security: everyone signed in can read everything; you can only write your own rows ----------
 alter table public.leads enable row level security;
 alter table public.todo_items enable row level security;
@@ -286,6 +323,7 @@ alter table public.team_members enable row level security;
 alter table public.orders enable row level security;
 alter table public.cash_items enable row level security;
 alter table public.cash_accounts enable row level security;
+alter table public.b2c_orders enable row level security;
 
 drop policy if exists "authenticated full access" on public.leads;
 drop policy if exists "authenticated read all" on public.leads;
@@ -419,6 +457,20 @@ create policy "authenticated update own" on public.cash_accounts
 create policy "authenticated delete own" on public.cash_accounts
   for delete using (auth.uid() = owner_id);
 
+drop policy if exists "authenticated read all" on public.b2c_orders;
+drop policy if exists "authenticated insert own" on public.b2c_orders;
+drop policy if exists "authenticated update own" on public.b2c_orders;
+drop policy if exists "authenticated delete own" on public.b2c_orders;
+create policy "authenticated read all" on public.b2c_orders
+  for select using (auth.role() = 'authenticated');
+create policy "authenticated insert own" on public.b2c_orders
+  for insert with check (auth.uid() = owner_id);
+create policy "authenticated update own" on public.b2c_orders
+  for update using (auth.uid() = owner_id) with check (auth.uid() = owner_id);
+create policy "authenticated delete own" on public.b2c_orders
+  for delete using (auth.uid() = owner_id);
+
+
 -- ---------- Data API grants ----------
 -- From 30 Oct 2026 Supabase no longer auto-grants API access to NEW tables in "public": a table
 -- without an explicit grant returns "permission denied" to supabase-js / PostgREST. Tables that
@@ -428,8 +480,9 @@ create policy "authenticated delete own" on public.cash_accounts
 grant select, insert, update, delete on
   public.leads, public.outbound_emails, public.todo_items, public.todo_outline,
   public.daily_musts, public.candidates, public.team_members, public.orders,
-  public.cash_items, public.cash_accounts
+  public.cash_items, public.cash_accounts, public.b2c_orders
   to authenticated, service_role;
+revoke all on public.b2c_orders from anon; -- default privileges would otherwise hand anon access
 
 create index if not exists leads_owner_id_idx on public.leads(owner_id);
 create index if not exists todo_items_owner_id_idx on public.todo_items(owner_id);
@@ -444,6 +497,7 @@ create index if not exists candidates_emails_idx on public.candidates using gin 
 create index if not exists team_members_reports_to_idx on public.team_members(reports_to);
 create index if not exists orders_stage_idx on public.orders(stage);
 create index if not exists cash_items_status_due_idx on public.cash_items(status, due_on);
+create index if not exists b2c_orders_stage_idx on public.b2c_orders(stage);
 
 -- ---------- realtime: push live changes to every connected browser ----------
 alter publication supabase_realtime add table public.leads;
@@ -455,6 +509,7 @@ alter publication supabase_realtime add table public.team_members;
 alter publication supabase_realtime add table public.orders;
 alter publication supabase_realtime add table public.cash_items;
 alter publication supabase_realtime add table public.cash_accounts;
+alter publication supabase_realtime add table public.b2c_orders;
 
 -- ---------- seed the 30 priority items (safe to run once; skipped if already seeded) ----------
 -- Requires the admin account (Sanjay) to already exist (Authentication -> Users -> Add user, email sanjay@sophiecreations.net).

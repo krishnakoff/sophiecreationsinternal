@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Public+Sans:wght@400;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=21">
+<link rel="stylesheet" href="style.css?v=22">
 </head>
 <body>
 
@@ -32,6 +32,7 @@
         <button type="button" data-target="crm" class="active">Outreach CRM</button>
         <button type="button" data-target="todo">To&#8209;Do List</button>
         <button type="button" data-target="orders">Orders</button>
+        <button type="button" data-target="b2c">B2C</button>
         <button type="button" data-target="cash">Cash</button>
         <button type="button" data-target="team">Team</button>
       </nav>
@@ -61,6 +62,12 @@
     <div id="orders-table-wrap"></div>
   </section>
 
+  <section id="view-b2c" class="view">
+    <div class="crm-sub" id="b2c-subtitle">Private clients</div>
+    <div class="cards orders-cards" id="b2c-cards"></div>
+    <div id="b2c-table-wrap"></div>
+  </section>
+
   <section id="view-cash" class="view">
     <div class="crm-sub" id="cash-subtitle">Cash</div>
     <div class="cards cash-cards" id="cash-cards"></div>
@@ -77,6 +84,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="config.js?v=2"></script>
-<script src="app.js?v=33"></script>
+<script src="app.js?v=34"></script>
 </body>
 </html>
