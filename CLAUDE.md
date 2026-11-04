@@ -21,6 +21,11 @@ change, or a fix to how something works (as opposed to "add this lead" / "update
 "check my outbound," which are just his own data), say so and hold off until Krishna directs it
 — don't make the change on Sanjay's say-so alone, even if it seems like a small tweak.
 
+## Start of every session
+
+Run `git pull` in this folder before anything else, so both Krishna's and Sanjay's Claude are
+working from the same, latest version of these instructions.
+
 ## This backend already exists — do not re-provision it
 
 There is exactly **one** Supabase project behind this app, already fully set up:
@@ -419,8 +424,23 @@ never send, draft, label, or trash.
   outline style as Krishna's. On Windows, save long paste-ready text to a `.txt` file in the
   project folder and tell him to open it and copy from there (copying from the terminal pane
   mangles long lines). When something is done, tell him which line to delete.
-- Rows in Orders/Cash belong to whoever is handling them; write with the chatting person's
-  `owner_id`, but read across both.
+- **Only surface the chatting person's own items.** Ownership = `owner_id` on `orders` /
+  `cash_items` / `leads` (the **Salesperson** / Owner column in the app). Items owned by the other
+  person never go in this person's Top 5, chases, factory questions or to-do list — not even as
+  reminders. Krishna and Sanjay are often both CC'd on a thread just to stay in the loop: **being
+  on an email (To or CC) is not ownership.** For an email thread, the owner is whoever owns that
+  client's orders/leads; if a client has no rows yet, ask once ("Is <client> yours or Krishna's?")
+  rather than assigning it.
+- If something genuinely needs the other person (e.g. a payment only they can make), mention it
+  once at the end under "For Krishna/Sanjay (FYI)", not as a task.
+- Rough split today: **Krishna** — MBM (incl. Magic/Zodiac/vermeil/Sunrise), ECH, Awe Inspired,
+  Blaire/Krystal, Valentina, Kirstin Ash, ByCharlotte, Gold Coin, AshaByADM, factories Sunrise
+  (SNR), Baiyanju (BYJ), MYL, Kirin, MouJie; staff/VA payments; Airwallex card. **Sanjay** —
+  Eternity (ZOD, MayaMila boxes), Chandra, Rakesh, Dan Jewellers, Foyer, Guyue, MBM trays/silicone
+  bands/3ct ring order, his and Anmol's director items. When unsure, the row's `owner_id` wins.
+- Write new rows with the owner who will actually act on them (usually the chatting person; if
+  Krishna logs something that is Sanjay's — e.g. a payment Sanjay made for his client — use
+  Sanjay's `owner_id`, and vice versa).
 
 1. **Orders tab**: load every row that isn't `delivered`/`cancelled` (plus delivered samples
    with `returned = false`), and work out which are Needs chase / Due soon.

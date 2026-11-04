@@ -538,7 +538,7 @@ function renderOrders() {
   wrap.innerHTML = `
     <div class="table-scroll">
     <table>
-      <thead><tr><th>Client / item</th><th>Factory</th><th>Stage</th><th>Promised</th><th>Last factory update</th><th>Handler</th><th>Flags</th><th></th></tr></thead>
+      <thead><tr><th>Client / item</th><th>Factory</th><th>Stage</th><th>Promised</th><th>Last factory update</th><th>Salesperson</th><th>Flags</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
     </div>
@@ -701,6 +701,7 @@ function renderCash() {
       <td>${due}</td>
       <td><span class="pill pill-cash-${c.status}">${escapeHtml(CASH_STATUS_LABEL[c.direction][c.status] || c.status)}</span>
         ${c.paid_on ? `<div class="cash-rel muted">${escapeHtml(fmtDate(parseDate(c.paid_on)))}</div>` : ""}</td>
+      <td class="muted">${escapeHtml(ownerName(c.owner_id))}</td>
       <td class="muted cash-funded">${escapeHtml(c.funded_by) || "&mdash;"}</td>
       <td>${c.notes ? `<div class="notes-cell">${escapeHtml(c.notes)}</div>` : ""}</td>
       <td>${canMark ? `<button type="button" class="log-update-btn cash-mark-btn" data-id="${c.id}">${doneLabel}</button>` : ""}</td>
@@ -709,7 +710,7 @@ function renderCash() {
   wrap.innerHTML = `
     <div class="table-scroll">
     <table>
-      <thead><tr><th>Who / what</th><th>Category</th><th class="cash-amount">Amount</th><th>Due</th><th>Status</th><th>Funded by</th><th>Notes</th><th></th></tr></thead>
+      <thead><tr><th>Who / what</th><th>Category</th><th class="cash-amount">Amount</th><th>Due</th><th>Status</th><th>Owner</th><th>Funded by</th><th>Notes</th><th></th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
     </div>
