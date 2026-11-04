@@ -426,6 +426,7 @@ const ORDER_STAGES = [
 ];
 const BEING_MADE = ["design", "sampling", "production", "qc"];
 let ordersFilter = null;
+let completedOpen = false;
 
 async function loadOrders() {
   const { data, error } = await sb.from("orders").select("*").order("promised_on", { nullsFirst: false });
@@ -485,7 +486,7 @@ function renderOrders() {
     { key: "soon", num: counts.soon, label: "Due soon", cls: "c-amber" },
     { key: "ok", num: counts.ok, label: "On track", cls: "c-emerald" },
     { key: "hold", num: counts.hold, label: "On hold", cls: "" },
-    { key: "closed", num: counts.closed, label: "Closed", cls: "" }
+    { key: "closed", num: counts.closed, label: "Completed", cls: "" }
   ];
   document.getElementById("orders-cards").innerHTML = cardSpecs.map(c => `
     <div class="card ${c.cls} ${ordersFilter === c.key ? "card-active" : ""}" data-key="${c.key ?? ""}">
@@ -501,17 +502,17 @@ function renderOrders() {
   });
 
   const wrap = document.getElementById("orders-table-wrap");
-  // Default view hides closed and on-hold rows; clicking those cards shows them.
+  // Default view hides completed and on-hold rows from the main table; completed orders
+  // get their own collapsible section underneath so every invoice stays accounted for.
   const visible = ordersFilter
     ? enriched.filter(e => e.h.key === ordersFilter)
     : enriched.filter(e => !["closed", "hold"].includes(e.h.key));
-  if (!visible.length) {
-    wrap.innerHTML = `<div class="empty-state">${orders.length ? "Nothing here." : "No orders tracked yet."}</div>`;
-    return;
-  }
+  const completed = enriched.filter(e => e.h.key === "closed")
+    .sort((a, b) => (a.o.client || "").localeCompare(b.o.client || "")
+      || (b.o.reference || "").localeCompare(a.o.reference || ""));
 
   const dateCell = s => s ? escapeHtml(fmtDate(parseDate(s))) : '<span class="muted">&mdash;</span>';
-  const rows = visible.map(({ o, h }) => {
+  const rowHtml = ({ o, h }) => {
     const stageLabel = (ORDER_STAGES.find(s => s.id === o.stage) || {}).label || o.stage;
     const age = o.last_update_on ? daysDiff(today, parseDate(o.last_update_on)) : null;
     const canLog = o.owner_id === session.user.id && h.key !== "closed";
@@ -534,15 +535,26 @@ function renderOrders() {
       </td>
       <td>${canLog ? `<button type="button" class="log-update-btn" data-id="${o.id}" title="Log a factory update dated today">Log update</button>` : ""}</td>
     </tr>`;
-  }).join("");
-  wrap.innerHTML = `
+  };
+  const table = list => `
     <div class="table-scroll">
     <table>
       <thead><tr><th>Client / item</th><th>Factory</th><th>Stage</th><th>Promised</th><th>Last factory update</th><th>Salesperson</th><th>Flags</th><th></th></tr></thead>
-      <tbody>${rows}</tbody>
+      <tbody>${list.map(rowHtml).join("")}</tbody>
     </table>
-    </div>
-  `;
+    </div>`;
+
+  const main = visible.length
+    ? table(visible)
+    : `<div class="empty-state">${orders.length ? "Nothing here." : "No orders tracked yet."}</div>`;
+  const completedSection = !ordersFilter && completed.length ? `
+    <details class="completed-orders"${completedOpen ? " open" : ""}>
+      <summary>Completed orders (${completed.length})</summary>
+      ${table(completed)}
+    </details>` : "";
+  wrap.innerHTML = main + completedSection;
+  const det = wrap.querySelector(".completed-orders");
+  if (det) det.addEventListener("toggle", () => { completedOpen = det.open; });
   wrap.querySelectorAll(".log-update-btn").forEach(btn => btn.addEventListener("click", () => logOrderUpdate(btn.dataset.id)));
 }
 

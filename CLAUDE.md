@@ -393,6 +393,11 @@ unless told otherwise).
   is flagged even after it's delivered.
 - `factory` is free text — use the supplier code/short name already used in the supplier folders.
 - Closing out: set `stage` to `delivered` (or `cancelled`) rather than deleting.
+- **Every client invoice gets a row** (one row per SI number, or one row covering a few related SIs
+  with all of them in `reference`) — including old, already-finished ones, entered straight at
+  `delivered`. They show in the collapsible "Completed orders" section under the open table, so
+  comparing a client's invoice folder (e.g. the MBM orders Drive folder) against the tab shows
+  nothing is missing. Check the folder vs the tab when Krishna asks "have we missed any".
 
 The only in-app write is the **Log update** button on your own rows (stamps today + a note).
 Everything else is added/edited from chat:
