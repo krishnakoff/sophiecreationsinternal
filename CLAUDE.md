@@ -452,13 +452,13 @@ never send, draft, label, or trash.
     statement & advance), ECH, Awe Inspired, Blaire/Krystal, Valentina, Kirstin Ash, ByCharlotte,
     Gold Coin, AshaByADM, Windsor, every lead from Apollo sequences and HK-fair outreach, and
     Anmol's outbound. Factories: Sunrise (SNR), Baiyanju (BYJ), MYL, Kirin, Jovim, Carel, Sai Ram,
-    Yuen Shuo, Leung. B2C: Krishna's own clients (e.g. Jeetu, Mona, Karan Tek, Joel, Sally), the
+    Yuen Shuo, Leung. B2C: Krishna's own clients (e.g. Mona, Karan Tek, Joel, Sally), the
     expo, website, ManyChat, live shopping.
   - **Sanjay** — B2B: Eternity (ZOD, MayaMila boxes at Guyue), Chandra, Rakesh, Dan Jewellers,
     and on the MBM account the packaging (mini fold pouch, velvet pouches, authenticity cards,
     presentation trays), silicone watch bands, the 3ct ring/chain/peridot order and Custom
     Vermeil 1–3 (MouJie). Factories: Foyer, Guyue, ZOD, MouJie, Charlotte Pearl (Gigi, gigi@charlotte-pearl.com — brass, quoting for Eternity; Krishna only needs it as a backup brass factory, so don't surface Gigi's emails in his sweep). B2C: his own clients (e.g.
-    Shreyans, and anyone in the B2C sheet where Sanjay is deal lead / "Sanju attending").
+    Shreyans, Jeetu Ramchandani, and anyone in the B2C sheet where Sanjay is deal lead / "Sanju attending").
     Director items (his and Anmol's transfers, his loan, Anmol's AE bill).
   - **Krishna is also the ops manager**: invoicing (completing SIs), client statements,
     payments to factories/staff, bookkeeping/logging in JS, Airwallex, company bills (rent, IRD,
