@@ -466,6 +466,11 @@ never send, draft, label, or trash.
     Sanjay's sales. So e.g. "issue SI006987 for Custom Vermeil 3 and add it to MBM's statement"
     goes in Krishna's sweep even though the sale is Sanjay's; Sanjay's sweep only gets the sales
     side (client follow-up, factory progress) of his own deals.
+  - **Collecting payment is the salesperson's job**, B2B and B2C. Sanjay collects from his own
+    clients (an unpaid Sanjay deal goes in *his* sweep, not Krishna's). For deals sold by someone
+    else (e.g. Anmol), the row is Krishna's and his action is to chase that salesperson, not the
+    client. Krishna's ops role covers issuing invoices and statements, not collecting for other
+    people's sales.
 - Write new rows with the owner who will actually act on them (usually the chatting person; if
   Krishna logs something that is Sanjay's — e.g. a payment Sanjay made for his client — use
   Sanjay's `owner_id`, and vice versa).
@@ -555,7 +560,8 @@ that's `orders`.
   `cash_items` "in" row for the same balance unless a specific payment is promised on a date
   (then put the SI in the cash row's `reference`).
 - **Ops still goes to Krishna**: issuing/completing the SI and statements for any B2C deal (incl.
-  Sanjay's) goes in Krishna's sweep; Sanjay's sweep gets only the client/factory side of his own.
+  Sanjay's) goes in Krishna's sweep. **Collecting the money is the salesperson's job** — Sanjay's
+  Unpaid rows rank in Sanjay's sweep only.
 - Seed rows one at a time with a real stage and a date — never bulk-import from memory. Every
   sheet line that isn't Sai Ram should have a row (entered as `sai_ram` once paid), so the tab
   and the sheet can be compared like the MBM invoice folder.
