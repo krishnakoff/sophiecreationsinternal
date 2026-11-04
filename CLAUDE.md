@@ -433,11 +433,26 @@ never send, draft, label, or trash.
   rather than assigning it.
 - If something genuinely needs the other person (e.g. a payment only they can make), mention it
   once at the end under "For Krishna/Sanjay (FYI)", not as a task.
-- Rough split today: **Krishna** — MBM (incl. Magic/Zodiac/vermeil/Sunrise), ECH, Awe Inspired,
-  Blaire/Krystal, Valentina, Kirstin Ash, ByCharlotte, Gold Coin, AshaByADM, factories Sunrise
-  (SNR), Baiyanju (BYJ), MYL, Kirin, MouJie; staff/VA payments; Airwallex card. **Sanjay** —
-  Eternity (ZOD, MayaMila boxes), Chandra, Rakesh, Dan Jewellers, Foyer, Guyue, MBM trays/silicone
-  bands/3ct ring order, his and Anmol's director items. When unsure, the row's `owner_id` wins.
+- **Who owns what** (salesperson = whoever secured the client/sale; the row's `owner_id` wins
+  when unsure):
+  - **Krishna** — B2B: MBM (Magic/Zodiac, 18K vermeil lab lines, Religious, Pearls, watches,
+    statement & advance), ECH, Awe Inspired, Blaire/Krystal, Valentina, Kirstin Ash, ByCharlotte,
+    Gold Coin, AshaByADM, Windsor, every lead from Apollo sequences and HK-fair outreach, and
+    Anmol's outbound. Factories: Sunrise (SNR), Baiyanju (BYJ), MYL, Kirin, Jovim, Carel, Sai Ram,
+    Yuen Shuo, Leung. B2C: Krishna's own clients (e.g. Jeetu, Mona, Karan Tek, Joel, Sally), the
+    expo, website, ManyChat, live shopping.
+  - **Sanjay** — B2B: Eternity (ZOD, MayaMila boxes at Guyue), Chandra, Rakesh, Dan Jewellers,
+    and on the MBM account the packaging (mini fold pouch, velvet pouches, authenticity cards,
+    presentation trays), silicone watch bands, the 3ct ring/chain/peridot order and Custom
+    Vermeil 1–3 (MouJie). Factories: Foyer, Guyue, ZOD, MouJie. B2C: his own clients (e.g.
+    Shreyans, and anyone in the B2C sheet where Sanjay is deal lead / "Sanju attending").
+    Director items (his and Anmol's transfers, his loan, Anmol's AE bill).
+  - **Krishna is also the ops manager**: invoicing (completing SIs), client statements,
+    payments to factories/staff, bookkeeping/logging in JS, Airwallex, company bills (rent, IRD,
+    utilities, bank) and loan paperwork are **Krishna's tasks for every client**, including
+    Sanjay's sales. So e.g. "issue SI006987 for Custom Vermeil 3 and add it to MBM's statement"
+    goes in Krishna's sweep even though the sale is Sanjay's; Sanjay's sweep only gets the sales
+    side (client follow-up, factory progress) of his own deals.
 - Write new rows with the owner who will actually act on them (usually the chatting person; if
   Krishna logs something that is Sanjay's — e.g. a payment Sanjay made for his client — use
   Sanjay's `owner_id`, and vice versa).
