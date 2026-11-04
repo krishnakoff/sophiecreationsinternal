@@ -124,6 +124,7 @@ create table if not exists public.candidates (
   id uuid primary key default gen_random_uuid(),
   owner_id uuid not null references auth.users(id) default auth.uid(),
   role text not null,
+  occupation text,
   name text not null,
   emails text[] not null default '{}',
   hourly_rate_usd numeric(6, 2),
@@ -492,6 +493,7 @@ create index if not exists outbound_emails_recipient_idx on public.outbound_emai
 create index if not exists todo_outline_owner_id_idx on public.todo_outline(owner_id);
 create index if not exists todo_outline_parent_id_idx on public.todo_outline(parent_id);
 create index if not exists daily_musts_owner_id_idx on public.daily_musts(owner_id);
+alter table public.candidates add column if not exists occupation text;
 create index if not exists candidates_role_idx on public.candidates(role);
 create index if not exists candidates_emails_idx on public.candidates using gin (emails);
 create index if not exists team_members_reports_to_idx on public.team_members(reports_to);
