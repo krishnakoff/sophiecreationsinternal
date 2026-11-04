@@ -413,9 +413,12 @@ never send, draft, label, or trash.
   block in his outline format plus line-level edits. When something is done, tell him which line
   to delete — don't hand back "DONE" markers. Give long paste-ready text via a file in
   `~/Downloads/claudedocs/` + `pbcopy` (terminal copy mangles long lines).
-- **Sanjay** has no outline note: end with a plain numbered list of his open items (his clients
-  and suppliers — Eternity, Chandra, Rakesh, Dan Jewellers, MBM trays/silicone bands, director
-  items) and keep it short.
+- **Sanjay** keeps his to-do in a Word document: end with a paste-ready **TODAY** block plus a
+  full updated copy of his sections when they change (his clients and suppliers — Eternity,
+  Chandra, Rakesh, Dan Jewellers, MBM trays/silicone bands, director items), same plain-text
+  outline style as Krishna's. On Windows, save long paste-ready text to a `.txt` file in the
+  project folder and tell him to open it and copy from there (copying from the terminal pane
+  mangles long lines). When something is done, tell him which line to delete.
 - Rows in Orders/Cash belong to whoever is handling them; write with the chatting person's
   `owner_id`, but read across both.
 
@@ -453,8 +456,8 @@ never send, draft, label, or trash.
      (e.g. goods shipped with no invoice). Note if client money (`held`) is being used to cover
      other bills. Ignore ShipAny.
    - The factory questions from step 5.
-   - The person's to-do output: Krishna → paste-ready **TODAY** block in his iCloud Notes
-     outline format plus line-level edits (only what changed); Sanjay → short numbered list.
+   - The person's to-do output: a paste-ready **TODAY** block plus line-level edits (only what
+     changed) — Krishna's goes into iCloud Notes, Sanjay's into his Word document.
    Don't overwrite `daily_musts` unless asked — offer to put the top two into slots 2/3.
 
 **Evening check-in** ("evening sweep"): same steps 1–2 but only since the morning run, then ask
