@@ -340,6 +340,14 @@ written and queried purely from chat. Both accounts can read it (same RLS as eve
   `video_editor`, etc. Reuse an existing role name if one fits (`select distinct role`); a new
   role needs no schema change. If someone already on file interviews for a different role, add a
   new row for that role (find them by email first) rather than overwriting the old one.
+- **`occupation`** = what the person *is* (snake_case: `virtual_assistant`, `video_editor`,
+  `graphic_designer`, ...), separate from `role` (the opening they interviewed for). Usually the
+  same; differs when e.g. a VA interviews for the editing role. Always set it.
+- **Video editor interviews** (`role = video_editor`, `occupation = video_editor`): scores keys
+  `editing` (portfolio quality), `style_fit` (short-form IG/Reels for Sophie & moveyobodytoday),
+  `speed` (turnaround), `comms`, `gut`; plus `test_edit` once a paid/unpaid test is back. Put the
+  portfolio link, software (Premiere / CapCut / After Effects / DaVinci), location/timezone and
+  turnaround per reel in `notes`.
 - **`emails`** is an array — people often give two addresses; store all of them. Match returning
   candidates with `emails=cs.{address}`.
 - **`verdict`** is the person's exact wording ("No based on value to hourly rate ratio");
@@ -366,7 +374,7 @@ curl -s "$SUPABASE_URL/rest/v1/candidates?or=(role.eq.video_editor,also_fit_for.
 curl -s -X POST "$SUPABASE_URL/rest/v1/candidates" \
   -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"owner_id": "<id>", "role": "video_editor", "name": "...", "emails": ["..."],
+  -d '{"owner_id": "<id>", "role": "video_editor", "occupation": "video_editor", "name": "...", "emails": ["..."],
        "hourly_rate_usd": 4.00, "status": "pending", "verdict": null, "notes": "...",
        "red_flags": null, "scores": {"comms": 4}, "also_fit_for": []}'
 ```
