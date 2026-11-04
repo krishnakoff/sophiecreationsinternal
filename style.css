@@ -336,3 +336,8 @@ th.cash-amount{ font-family:var(--font-body); }
 }
 @media (max-width:480px){ .cards, .orders-cards, .cash-cards{ grid-template-columns:repeat(2,1fr); } }
 @media (prefers-reduced-motion: reduce){ *{ transition:none !important; } }
+
+/* Completed orders: collapsible section under the open-orders table */
+.completed-orders{margin-top:28px}
+.completed-orders > summary{cursor:pointer;font-weight:600;font-size:15px;padding:8px 0;color:inherit;list-style:revert}
+.completed-orders .order-row{opacity:.8}
