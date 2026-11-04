@@ -403,10 +403,21 @@ curl -s -X POST "$SUPABASE_URL/rest/v1/orders" \
 
 ### The sweep (run on request: "run the sweep" / "what are my to-dos today")
 
-Krishna rarely opens the Orders tab himself — the sweep *is* how he sees it. His to-do list
-lives in iCloud Notes (phone, offline), so the output is a ranked action list plus paste-ready
-text, not a status dump. Everything here is **read-only** on mail and chat: Gmail
-`search_threads` / `get_thread` / `get_message` only — never send, draft, label, or trash.
+The sweep runs for **whoever is chatting** (Krishna or Sanjay — confirm first). Neither of them
+opens the Orders/Cash tabs much; the sweep *is* how they see them, so the output is a ranked
+action list, not a status dump. It reads **that person's own** connected Gmail. Everything here
+is **read-only** on mail and chat: Gmail `search_threads` / `get_thread` / `get_message` only —
+never send, draft, label, or trash.
+
+- **Krishna** keeps his to-do in iCloud Notes (phone, offline): end with a paste-ready **TODAY**
+  block in his outline format plus line-level edits. When something is done, tell him which line
+  to delete — don't hand back "DONE" markers. Give long paste-ready text via a file in
+  `~/Downloads/claudedocs/` + `pbcopy` (terminal copy mangles long lines).
+- **Sanjay** has no outline note: end with a plain numbered list of his open items (his clients
+  and suppliers — Eternity, Chandra, Rakesh, Dan Jewellers, MBM trays/silicone bands, director
+  items) and keep it short.
+- Rows in Orders/Cash belong to whoever is handling them; write with the chatting person's
+  `owner_id`, but read across both.
 
 1. **Orders tab**: load every row that isn't `delivered`/`cancelled` (plus delivered samples
    with `returned = false`), and work out which are Needs chase / Due soon.
@@ -416,7 +427,13 @@ text, not a status dump. Everything here is **read-only** on mail and chat: Gmai
    factory sent a real update on an order row, PATCH `last_update_on` + `last_update`. If a
    deposit notice (Airwallex/DBS) or payment confirmation matches a `cash_items` row, mark it
    `paid` with `paid_on`; a new bill or invoice with no row gets one (`planned`). Before flagging
-   "reply to X", check Sent — he may already have replied.
+   "reply to X", read the whole thread or search Sent (`to:X`) — thread summaries can show the
+   client's chase even when the reply already went out.
+   **"Tracker update" emails**: if Sanjay is using the plain Claude app instead of Claude Code,
+   he emails info@sophiecreations.net with subject `Tracker update — <date>` and sections ORDERS /
+   PAYMENTS OUT / MONEY IN / CLIENTS / NEW TO-DOS. In Krishna's sweep, search
+   `subject:"Tracker update"` and apply each line to `orders` / `cash_items` / `leads` (Sanjay's
+   items with his `owner_id`), then say what was applied.
 3. **WhatsApp Web** (work chats with MBM and internal), only if a browser tool is connected
    this session — read-only, never type into a chat or send. If it isn't connected, say so.
 4. **CRM**: leads whose `next_action_date` is today or past. **Cash**: `cash_items` overdue or due
@@ -436,8 +453,8 @@ text, not a status dump. Everything here is **read-only** on mail and chat: Gmai
      (e.g. goods shipped with no invoice). Note if client money (`held`) is being used to cover
      other bills. Ignore ShipAny.
    - The factory questions from step 5.
-   - A paste-ready **TODAY** block in his iCloud Notes outline format, plus any line-level edits
-     to the rest of the note (only what changed).
+   - The person's to-do output: Krishna → paste-ready **TODAY** block in his iCloud Notes
+     outline format plus line-level edits (only what changed); Sanjay → short numbered list.
    Don't overwrite `daily_musts` unless asked — offer to put the top two into slots 2/3.
 
 **Evening check-in** ("evening sweep"): same steps 1–2 but only since the morning run, then ask
@@ -471,6 +488,22 @@ Liquidity is tight, so every committed payment is tracked until it's paid. Table
 Table `public.cash_accounts` holds the latest balance per bank account (`account`, `balance_usd`,
 `as_of`). Cash on hand on the tab is their sum, so update it whenever a balance is given.
 Krishna counts **Airwallex as all the cash** (USD + HKD at 7.78) — don't add DBS unless told.
+Airwallex statement PDFs (per currency) are the source of truth: set balances from "Ending
+balance" and match each payout to a row.
+
+How to classify money that moves:
+- **Transfers to Sanjay or Anmol** are ad-hoc director draws (the accountant averages them,
+  offsets reimbursements, books the rest as salary) — log as `director`, paid; don't match them
+  to planned loan/bill rows unless told.
+- **Tomex Global Trading** is the agent that pays China factories for us (region restrictions).
+  A Tomex payout = factory payments in RMB; Tomex/Bank of China receipts name the payee
+  (e.g. 牟杰 = MouJie, 邹建荣 = Foyer Company). Split the payout across payees pro rata by RMB.
+- **Alipay HK on Sanjay's personal HSBC card** = company cost paid personally — log it with
+  `funded_by` naming the card, note that it's to be reimbursed or offset.
+- **Fitaye Company Limited** is Krishna's consultancy: monthly invoice = HKD 15,000 base +
+  commission (USD × 7.8). Commission is sometimes paid partly or deferred — keep the unpaid
+  balance as a `deferred` row.
+- Ignore **ShipAny** payment reminders.
 
 ```bash
 curl -s -X POST "$SUPABASE_URL/rest/v1/cash_items" \
