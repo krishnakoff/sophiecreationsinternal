@@ -89,8 +89,8 @@ too, unless it's a joint one).
 manufacture with.** Never add a B2C individual customer here, even if they show up in Gmail with
 a sales invoice, a costing email, or an active order (e.g. Chloe's SI-numbered invoice emails to
 individuals like Jeetu Ramchandani, Jasmine Mehta, Jyoti Bhagchandani — these are personal
-customers, not retail-client leads). B2C customer tracking lives in Krishna's to-do outline
-instead (see the B2C Orders section there), not in `leads`. If a Gmail scan turns up a personal
+customers, not retail-client leads). B2C deals live in `b2c_orders` (the **B2C** tab — see the
+B2C section below), never in `leads`. If a Gmail scan turns up a personal
 sale, at most flag it back ("saw an invoice for X, might be worth checking off your to-do") —
 don't create or touch a `leads` row for it.
 
@@ -463,7 +463,9 @@ never send, draft, label, or trash.
   Sanjay's `owner_id`, and vice versa).
 
 1. **Orders tab**: load every row that isn't `delivered`/`cancelled` (plus delivered samples
-   with `returned = false`), and work out which are Needs chase / Due soon.
+   with `returned = false`), and work out which are Needs chase / Due soon. **B2C tab**: load the
+   chatting person's `b2c_orders` rows that aren't `sai_ram`/`cancelled` and work out Unpaid /
+   Needs chase / Due soon (rules in the B2C section).
 2. **All mail, last 72 hours** (`after:YYYY/MM/DD`, no `in:` restriction, skip promotions/social
    and DMARC/newsletter noise): payments in and out, client replies or chases, factory updates,
    meeting-notes bots (Gemini/Apollo summaries carry real action items), staff invoices. If a
@@ -479,14 +481,17 @@ never send, draft, label, or trash.
    items with his `owner_id`), then say what was applied.
 3. **WhatsApp Web** (work chats with MBM and internal), only if a browser tool is connected
    this session — read-only, never type into a chat or send. If it isn't connected, say so.
-4. **CRM**: leads whose `next_action_date` is today or past. **Cash**: `cash_items` overdue or due
+4. **CRM**: leads whose `next_action_date` is today or past. **B2C**: the person's rows whose
+   `next_action_on` is today or past, every Unpaid row, and every `story` row. **Cash**: `cash_items` overdue or due
    within 7 days, expected money in, and the cash position (see the Cash section).
 5. **Ask, don't assume**: factory contact is on WeChat (and WhatsApp), which Claude can't see.
    For each Needs chase row, ask one short question ("Anything from Sunrise on Magic Numbers?")
    and PATCH the row from his answer.
 6. **Report**, in this order:
    - **Top 5 today**, ranked: (1) money that unblocks production or a receivable you can
-     collect, (2) clients waiting on him, (3) overdue factory chases, (4) new pipeline,
+     collect — a B2C row that is Unpaid (delivered, money not in) ranks here, (2) clients waiting
+     on him — other open B2C rows rank here, except `waiting_on = 'client'` rows, which are chased
+     at most weekly, (3) overdue factory chases, (4) new pipeline,
      (5) everything else. One line each, with *why* it's ranked there. Never rank a payment
      without checking it against cash on hand — if paying it would push the position further
      short, say so and suggest what to defer or which receivable to chase first.
@@ -506,6 +511,56 @@ paid or received today** — mark those `cash_items` `paid`, and ask for the cur
 balance to update `cash_accounts` (it counts as all the cash). When rent is marked paid, add next
 month's row (10th, ~USD 3k). Hand back what's still open for tomorrow morning, including tomorrow's
 cash due and the updated position.
+
+## B2C orders (private clients, pushed to "Sai Ram")
+
+Table `public.b2c_orders`, rendered on the web app's **B2C** tab (realtime, company-wide like
+`orders`; the sweep only surfaces the chatting person's own rows). It is the **action layer**
+for private-client deals: what's the next move that gets each one to **Sai Ram**. The **B2C Lead
+Management Sheet** (internal Google Sheet, read-only — never edit it) stays the ledger for
+revenue, cost, commissions and Paid/Unpaid; the stage names here mirror its *CRM Stage* column,
+and `reference` (the SI number) links a row to its sheet line. Keep B2B production out of here —
+that's `orders`.
+
+- **`stage`**: `story` → `design_pricing` → `in_production` → `ready_to_ship` → `in_transit` →
+  `delivered` → `sai_ram`, plus `on_hold` / `cancelled`.
+  - **Sai Ram = delivered AND paid** (the company's own term). That's the finish line.
+  - **`delivered` = goods with the client, money not in yet** → flagged **Unpaid**. This is the
+    most important flag: it's a receivable, ranked in sweep category 1.
+  - **`story`** = the salesperson (someone other than Krishna, usually Anmol) keeps giving reasons
+    it hasn't moved. Always Needs chase — the action is to chase *the salesperson*, not the client.
+  - Enquiry / quoting / waiting for the client to confirm all sit in `design_pricing`.
+- **`salesperson`** = the sheet's *Deal Lead* (Krishna / Sanjay / Anmol / …), free text.
+  **`owner_id`** = who has to push it: Sanjay's own deals → Sanjay; Krishna's deals and every deal
+  whose salesperson is someone else (Anmol etc.) → Krishna, because he chases them.
+- **`waiting_on`**: exactly one of `client`, `salesperson`, `factory`, `us` (or null). Needs chase
+  fires when the last update is 3+ days old — **7+ days when `waiting_on = 'client'`** (don't pester
+  clients more than weekly).
+- **`next_action` / `next_action_on`**: the single next move and when. On/after the date → Due
+  soon. Keep it concrete ("send 2 bangle quotes", "collect balance at Sat dinner").
+- **`last_update_on` / `last_update`**: PATCH whenever there's real movement (chat, email, the
+  person tells you). The **Log update** button on your own rows does the same.
+- **Money**: `currency` (`USD` or `HKD`), `invoice_amount`, `deposit_amount` + `deposit_on`,
+  `balance_due`, `balance_received_on`. When the balance comes in, set `balance_received_on`
+  and move the stage to `sai_ram`. The Cash tab shows the B2C Unpaid total as its own line (HKD
+  converted at 7.78) but does **not** add it to the cash position, so don't also create a
+  `cash_items` "in" row for the same balance unless a specific payment is promised on a date
+  (then put the SI in the cash row's `reference`).
+- **Ops still goes to Krishna**: issuing/completing the SI and statements for any B2C deal (incl.
+  Sanjay's) goes in Krishna's sweep; Sanjay's sweep gets only the client/factory side of his own.
+- Seed rows one at a time with a real stage and a date — never bulk-import from memory. Every
+  sheet line that isn't Sai Ram should have a row (entered as `sai_ram` once paid), so the tab
+  and the sheet can be compared like the MBM invoice folder.
+
+```bash
+curl -s -X POST "$SUPABASE_URL/rest/v1/b2c_orders" \
+  -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"owner_id": "<id>", "salesperson": "Sanjay", "client": "...", "item": "...",
+       "reference": "SI00xxxx", "stage": "design_pricing", "waiting_on": "us",
+       "currency": "USD", "invoice_amount": 0, "next_action": "...", "next_action_on": "YYYY-MM-DD",
+       "last_update_on": "YYYY-MM-DD", "last_update": "..."}'
+```
 
 ## Cash (payables, receivables, client money held)
 

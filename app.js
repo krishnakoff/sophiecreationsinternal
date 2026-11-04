@@ -28,7 +28,9 @@ let outlineNodes = [];
 let dailyMusts = [];
 let teamMembers = [];
 let orders = [];
+let b2cOrders = [];
 let cashItems = [];
+let cashLoaded = false;
 let cashAccounts = [];
 let realtimeReady = false;
 let viewingOwnerId = null;
@@ -125,7 +127,7 @@ if (lastTab && document.getElementById("view-" + lastTab)) switchTab(lastTab);
 
 // ---------- data + realtime ----------
 async function loadAll() {
-  await Promise.all([loadLeads(), loadOutline(), loadOutboundStats(), loadMusts(), loadTeam(), loadOrders(), loadCash()]);
+  await Promise.all([loadLeads(), loadOutline(), loadOutboundStats(), loadMusts(), loadTeam(), loadOrders(), loadB2c(), loadCash()]);
   subscribeRealtime();
 }
 
@@ -157,6 +159,9 @@ function subscribeRealtime() {
     .subscribe();
   sb.channel("public:orders")
     .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, loadOrders)
+    .subscribe();
+  sb.channel("public:b2c_orders")
+    .on("postgres_changes", { event: "*", schema: "public", table: "b2c_orders" }, loadB2c)
     .subscribe();
   sb.channel("public:cash")
     .on("postgres_changes", { event: "*", schema: "public", table: "cash_items" }, loadCash)
@@ -566,6 +571,168 @@ async function logOrderUpdate(id) {
   loadOrders();
 }
 
+// ---------- B2C (private-client deals, pushed toward "Sai Ram" = delivered AND paid) ----------
+// Stages mirror the B2C Lead Management Sheet's CRM Stage column; the sheet stays the ledger
+// (revenue, cost, commission) and this tab is the action layer. Company-wide like Orders.
+// "Story" = the salesperson (not the row's owner) keeps giving reasons it hasn't moved: chase them.
+const B2C_STAGES = [
+  { id: "story", label: "Story" },
+  { id: "design_pricing", label: "Design & Pricing" },
+  { id: "in_production", label: "In-Production" },
+  { id: "ready_to_ship", label: "Ready to Ship" },
+  { id: "in_transit", label: "In-Transit" },
+  { id: "delivered", label: "Delivered" },
+  { id: "sai_ram", label: "Sai Ram" },
+  { id: "on_hold", label: "On hold" },
+  { id: "cancelled", label: "Cancelled" }
+];
+const B2C_WAITING = { client: "Client", salesperson: "Salesperson", factory: "Factory", us: "Us" };
+const HKD_PER_USD = 7.78;
+const CLIENT_CHASE_DAYS = 7;
+let b2cFilter = null;
+let b2cDoneOpen = false;
+
+async function loadB2c() {
+  const { data, error } = await sb.from("b2c_orders").select("*").order("next_action_on", { nullsFirst: false });
+  if (!error) { b2cOrders = data || []; renderB2c(); if (cashLoaded) renderCash(); }
+  else console.error("loadB2c:", error.message);
+}
+
+function fmtMoney(n, cur) {
+  if (n === null || n === undefined || n === "") return "TBD";
+  const v = Number(n).toLocaleString("en-US", { maximumFractionDigits: 2 });
+  return (cur === "HKD" ? "HK$" : "$") + v;
+}
+// What's still owed on a row, in USD: the balance if known, else the invoice value (an upper bound).
+function b2cOwedUsd(o) {
+  const raw = o.balance_due ?? o.invoice_amount;
+  if (raw === null || raw === undefined) return null;
+  return o.currency === "HKD" ? Number(raw) / HKD_PER_USD : Number(raw);
+}
+function b2cUnpaid(o) { return o.stage === "delivered" && !o.balance_received_on; }
+function b2cOwedTotal() {
+  const rows = b2cOrders.filter(b2cUnpaid);
+  return { rows, usd: rows.reduce((t, o) => t + (b2cOwedUsd(o) || 0), 0) };
+}
+
+function b2cHealth(o, today) {
+  if (["sai_ram", "cancelled"].includes(o.stage)) return { key: "closed", reasons: [] };
+  if (o.stage === "on_hold") return { key: "hold", reasons: [] };
+  if (b2cUnpaid(o)) return { key: "unpaid", reasons: ["delivered — money not in"] };
+  const chase = [], soon = [];
+  if (o.stage === "story") chase.push("story — chase " + (o.salesperson || "the salesperson"));
+  const limit = o.waiting_on === "client" ? CLIENT_CHASE_DAYS : STALE_DAYS;
+  if (!o.last_update_on) chase.push("no update logged");
+  else {
+    const age = daysDiff(today, parseDate(o.last_update_on));
+    if (age >= limit) chase.push("no update in " + age + "d");
+  }
+  if (o.promised_on) {
+    const diff = daysDiff(parseDate(o.promised_on), today);
+    if (diff < 0) chase.push(Math.abs(diff) + "d past promised date");
+    else if (diff <= DUE_SOON_DAYS) soon.push(diff === 0 ? "promised today" : "promised in " + diff + "d");
+  }
+  if (o.next_action_on && daysDiff(parseDate(o.next_action_on), today) <= 0) soon.push("next action due");
+  if (chase.length) return { key: "chase", reasons: chase.concat(soon) };
+  if (soon.length) return { key: "soon", reasons: soon };
+  return { key: "ok", reasons: [] };
+}
+const B2C_RANK = { unpaid: 0, chase: 1, soon: 2, ok: 3, hold: 4, closed: 5 };
+
+function renderB2c() {
+  const today = new Date();
+  const enriched = b2cOrders.map(o => ({ o, h: b2cHealth(o, today) }));
+  enriched.sort((a, b) => B2C_RANK[a.h.key] - B2C_RANK[b.h.key]
+    || (a.o.next_action_on || a.o.promised_on || "9999").localeCompare(b.o.next_action_on || b.o.promised_on || "9999"));
+  const counts = { unpaid: 0, chase: 0, soon: 0, ok: 0, hold: 0, closed: 0 };
+  enriched.forEach(e => counts[e.h.key]++);
+  const open = counts.unpaid + counts.chase + counts.soon + counts.ok;
+  const owed = b2cOwedTotal();
+
+  document.getElementById("b2c-subtitle").textContent =
+    "Private clients — " + open + " open, pushing each to Sai Ram, as of " +
+    today.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+
+  const cardSpecs = [
+    { key: null, num: open, label: "Open", cls: "" },
+    { key: "unpaid", num: fmtUSD(Math.round(owed.usd)), label: "Unpaid · " + counts.unpaid, cls: "c-garnet" },
+    { key: "chase", num: counts.chase, label: "Needs chase", cls: "c-amber" },
+    { key: "soon", num: counts.soon, label: "Due soon", cls: "c-sapphire" },
+    { key: "ok", num: counts.ok, label: "On track", cls: "c-emerald" },
+    { key: "hold", num: counts.hold, label: "On hold", cls: "" },
+    { key: "closed", num: counts.closed, label: "Sai Ram / closed", cls: "" }
+  ];
+  document.getElementById("b2c-cards").innerHTML = cardSpecs.map(c => `
+    <div class="card ${c.cls} ${b2cFilter === c.key ? "card-active" : ""}" data-key="${c.key ?? ""}">
+      <div class="num">${c.num}</div><div class="label">${c.label}</div>
+    </div>`).join("");
+  document.querySelectorAll("#b2c-cards .card").forEach(card => card.addEventListener("click", () => {
+    const key = card.dataset.key || null;
+    b2cFilter = b2cFilter === key ? null : key;
+    renderB2c();
+  }));
+
+  const wrap = document.getElementById("b2c-table-wrap");
+  const visible = b2cFilter ? enriched.filter(e => e.h.key === b2cFilter)
+    : enriched.filter(e => !["closed", "hold"].includes(e.h.key));
+  const done = enriched.filter(e => e.h.key === "closed");
+  const dateCell = s => s ? escapeHtml(fmtDate(parseDate(s))) : '<span class="muted">&mdash;</span>';
+  const rowHtml = ({ o, h }) => {
+    const stageLabel = (B2C_STAGES.find(s => s.id === o.stage) || {}).label || o.stage;
+    const age = o.last_update_on ? daysDiff(today, parseDate(o.last_update_on)) : null;
+    const canLog = o.owner_id === session.user.id && h.key !== "closed";
+    const money = o.balance_due !== null && o.balance_due !== undefined
+      ? fmtMoney(o.balance_due, o.currency) + ' <span class="muted">owed</span>'
+      : (o.invoice_amount !== null && o.invoice_amount !== undefined ? fmtMoney(o.invoice_amount, o.currency) + ' <span class="muted">invoice</span>' : '<span class="muted">&mdash;</span>');
+    return `
+    <tr class="order-row order-${h.key === "unpaid" ? "chase" : h.key}">
+      <td class="company">${escapeHtml(o.client)}
+        <div class="order-item">${escapeHtml(o.item)}</div>
+        ${o.reference ? `<div class="order-ref">${escapeHtml(o.reference)}</div>` : ""}
+      </td>
+      <td class="muted">${escapeHtml(o.salesperson) || "&mdash;"}</td>
+      <td><span class="pill pill-b2c-${o.stage}">${escapeHtml(stageLabel)}</span></td>
+      <td class="muted">${o.waiting_on ? escapeHtml(B2C_WAITING[o.waiting_on]) : "&mdash;"}</td>
+      <td class="order-update">${o.next_action_on ? `<span class="order-date">${dateCell(o.next_action_on)}</span>` : ""}
+        ${o.next_action ? `<div class="order-update-text">${escapeHtml(o.next_action)}</div>` : (o.next_action_on ? "" : '<span class="muted">&mdash;</span>')}
+      </td>
+      <td class="order-date">${money}</td>
+      <td class="order-update">
+        ${o.last_update_on ? `<span class="order-date">${escapeHtml(fmtDate(parseDate(o.last_update_on)))}</span> <span class="muted">(${age === 0 ? "today" : age + "d ago"})</span>` : '<span class="muted">&mdash;</span>'}
+        ${o.last_update ? `<div class="order-update-text">${escapeHtml(o.last_update)}</div>` : ""}
+      </td>
+      <td class="muted">${escapeHtml(ownerName(o.owner_id))}</td>
+      <td class="order-flags">${h.reasons.map(r => `<span class="order-flag flag-${h.key === "unpaid" ? "chase" : h.key}">${escapeHtml(r)}</span>`).join("")}
+        ${o.notes ? `<div class="notes-cell">${escapeHtml(o.notes)}</div>` : ""}
+      </td>
+      <td>${canLog ? `<button type="button" class="log-update-btn" data-id="${o.id}" title="Log an update dated today">Log update</button>` : ""}</td>
+    </tr>`;
+  };
+  const table = list => `
+    <div class="table-scroll"><table>
+      <thead><tr><th>Client / item</th><th>Salesperson</th><th>Stage</th><th>Waiting on</th><th>Next action</th><th>Money</th><th>Last update</th><th>Owner</th><th>Flags</th><th></th></tr></thead>
+      <tbody>${list.map(rowHtml).join("")}</tbody>
+    </table></div>`;
+  const main = visible.length ? table(visible)
+    : `<div class="empty-state">${b2cOrders.length ? "Nothing here." : "No B2C deals tracked yet."}</div>`;
+  const doneSection = !b2cFilter && done.length ? `
+    <details class="completed-orders"${b2cDoneOpen ? " open" : ""}>
+      <summary>Sai Ram / closed (${done.length})</summary>${table(done)}
+    </details>` : "";
+  wrap.innerHTML = main + doneSection;
+  const det = wrap.querySelector(".completed-orders");
+  if (det) det.addEventListener("toggle", () => { b2cDoneOpen = det.open; });
+  wrap.querySelectorAll(".log-update-btn").forEach(btn => btn.addEventListener("click", () => logB2cUpdate(btn.dataset.id)));
+}
+
+async function logB2cUpdate(id) {
+  const text = window.prompt("What's the latest? (logged as today's update)");
+  if (text === null) return;
+  const { error } = await sb.from("b2c_orders").update({ last_update_on: hkDateToday(), last_update: text.trim() }).eq("id", id);
+  if (error) { console.error("logB2cUpdate:", error.message); alert("Couldn't save: " + error.message); return; }
+  loadB2c();
+}
+
 // ---------- Cash (what's due, what's coming in, client money held) ----------
 // Company-wide like Orders. Liquidity is tight, so every committed payment sits here until it's
 // paid: direction "out" is owed, "in" is expected, "held" is a client prepayment we owe back in
@@ -592,6 +759,7 @@ async function loadCash() {
   if (accounts.error) console.error("loadCash accounts:", accounts.error.message);
   cashItems = items.data || [];
   cashAccounts = accounts.data || [];
+  cashLoaded = true;
   renderCash();
 }
 
@@ -672,6 +840,7 @@ function renderCash() {
       <span class="${position < 0 ? "short" : "ok"}"><b>${fmtUSD(position)}</b> ${position < 0 ? "short" : "spare"}</span>
     </div>
     <div class="cash-balances muted">${balanceNote}${noAmount(openOut) ? ` · ${noAmount(openOut)} unpaid item(s) have no amount yet` : ""}</div>
+    ${b2cOwedTotal().rows.length ? `<div class="cash-balances muted">B2C delivered but unpaid: <b>${fmtUSD(Math.round(b2cOwedTotal().usd))}</b> across ${b2cOwedTotal().rows.length} client(s) — not in the position above; see the B2C tab.</div>` : ""}
   `;
 
   renderCashOutlook(today, cashOnHand);
