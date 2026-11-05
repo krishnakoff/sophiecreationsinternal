@@ -350,3 +350,12 @@ th.cash-amount{ font-family:var(--font-body); }
 .pill-b2c-delivered{ background:var(--garnet-tint, var(--panel-2)); color:var(--garnet); }
 .pill-b2c-sai_ram{ background:var(--emerald-tint); color:var(--emerald); }
 .pill-b2c-on_hold, .pill-b2c-cancelled{ background:var(--panel-2); color:var(--muted); }
+
+/* Outreach contact list (CRM tab, collapsed) */
+.outreach .outreach-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:8px 0 12px}
+.outreach-group{margin:0 0 14px}
+.outreach-group-head{display:flex;gap:8px;align-items:center;margin:0 0 4px}
+.outreach-table{width:100%;font-size:12.5px}
+.outreach-table td{padding:3px 8px;border-bottom:1px solid var(--line, #eee)}
+.outreach-table .mono{font-family:"IBM Plex Mono",monospace;white-space:nowrap}
+.outreach-table .nowrap{white-space:nowrap}

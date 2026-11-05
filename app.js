@@ -29,6 +29,8 @@ let dailyMusts = [];
 let teamMembers = [];
 let orders = [];
 let b2cOrders = [];
+let outreachContacts = [];
+let outreachOpen = false;
 let cashItems = [];
 let cashLoaded = false;
 let cashAccounts = [];
@@ -127,7 +129,7 @@ if (lastTab && document.getElementById("view-" + lastTab)) switchTab(lastTab);
 
 // ---------- data + realtime ----------
 async function loadAll() {
-  await Promise.all([loadLeads(), loadOutline(), loadOutboundStats(), loadMusts(), loadTeam(), loadOrders(), loadB2c(), loadCash()]);
+  await Promise.all([loadLeads(), loadOutline(), loadOutboundStats(), loadMusts(), loadTeam(), loadOrders(), loadB2c(), loadCash(), loadOutreach()]);
   subscribeRealtime();
 }
 
@@ -569,6 +571,58 @@ async function logOrderUpdate(id) {
   const { error } = await sb.from("orders").update({ last_update_on: hkDateToday(), last_update: text.trim() }).eq("id", id);
   if (error) { console.error("logOrderUpdate:", error.message); alert("Couldn't save: " + error.message); return; }
   loadOrders();
+}
+
+// ---------- Outreach contact list (do-not-cold-email + "who have we spoken to") ----------
+// Company-wide reference list kept from chat (see CLAUDE.md). Collapsed at the bottom of the CRM tab;
+// "Copy" buttons give a plain one-per-line list to hand to whoever runs outbound.
+const OUTREACH_GROUPS = [
+  { id: "client", label: "Clients" },
+  { id: "active", label: "Active conversations" },
+  { id: "replied", label: "Replied / gone quiet — re-engagement pool" },
+  { id: "opted_out", label: "Not interested / unsubscribed" },
+  { id: "blocked", label: "Blocked / spam-blocked" },
+  { id: "supplier", label: "Suppliers & partners" },
+  { id: "internal", label: "Internal" },
+  { id: "dead_address", label: "Dead addresses (bounced)" }
+];
+async function loadOutreach() {
+  const { data, error } = await sb.from("outreach_contacts").select("*").order("entry");
+  if (!error) { outreachContacts = data || []; renderOutreach(); }
+  else console.error("loadOutreach:", error.message);
+}
+function copyText(text, btn) {
+  const done = () => { const t = btn.textContent; btn.textContent = "Copied ✓"; setTimeout(() => { btn.textContent = t; }, 1500); };
+  if (navigator.clipboard) navigator.clipboard.writeText(text).then(done).catch(() => window.prompt("Copy:", text));
+  else window.prompt("Copy:", text);
+}
+function renderOutreach() {
+  const wrap = document.getElementById("outreach-wrap");
+  if (!wrap) return;
+  if (!outreachContacts.length) { wrap.innerHTML = ""; return; }
+  const fmt = d => d ? escapeHtml(fmtDate(parseDate(d))) : "";
+  const groups = OUTREACH_GROUPS.map(g => ({ ...g, rows: outreachContacts.filter(r => r.category === g.id) })).filter(g => g.rows.length);
+  const body = groups.map(g => `
+    <div class="outreach-group">
+      <div class="outreach-group-head"><b>${escapeHtml(g.label)}</b> <span class="muted">(${g.rows.length})</span>
+        <button type="button" class="add-item-btn outreach-copy" data-cat="${g.id}">Copy</button></div>
+      <table class="outreach-table"><tbody>${g.rows.map(r => `
+        <tr><td class="mono">${escapeHtml(r.entry)}</td><td>${escapeHtml(r.company)}</td><td class="muted">${escapeHtml(r.reason)}</td><td class="muted nowrap">${fmt(r.last_activity_on)}</td></tr>`).join("")}
+      </tbody></table>
+    </div>`).join("");
+  wrap.innerHTML = `
+    <details class="completed-orders outreach"${outreachOpen ? " open" : ""}>
+      <summary>Outreach contact list (${outreachContacts.length}) — do not cold email</summary>
+      <div class="outreach-actions"><button type="button" class="add-item-btn" id="outreach-copy-all">Copy all (one per line)</button>
+        <span class="muted">Clients, active conversations, replies, opt-outs, blocks, suppliers and dead addresses.</span></div>
+      ${body}
+    </details>`;
+  const det = wrap.querySelector("details");
+  det.addEventListener("toggle", () => { outreachOpen = det.open; });
+  const lines = rows => rows.map(r => r.entry).join("\n");
+  wrap.querySelector("#outreach-copy-all").addEventListener("click", e => copyText(lines(outreachContacts), e.target));
+  wrap.querySelectorAll(".outreach-copy").forEach(b => b.addEventListener("click", () =>
+    copyText(lines(outreachContacts.filter(r => r.category === b.dataset.cat)), b)));
 }
 
 // ---------- B2C (private-client deals, pushed toward "Sai Ram" = delivered AND paid) ----------
