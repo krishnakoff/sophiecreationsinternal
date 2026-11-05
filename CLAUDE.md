@@ -178,6 +178,22 @@ Updating an existing lead (advancing its stage, setting a manual next action, ma
 dead+reason) is a PATCH to `$SUPABASE_URL/rest/v1/leads?id=eq.<id>` with just the changed
 fields.
 
+## Outreach contact list (do-not-cold-email)
+
+Table `public.outreach_contacts` — one row per `entry` (a domain, an exact email, or a company
+name when no domain is known; `kind` says which) with `category`: `client`, `active`,
+`replied`, `opted_out`, `blocked`, `supplier`, `internal`, `dead_address`, plus `company`,
+`reason` (evidence, e.g. "Unsubscribed (Apollo)", "'No thank you' 2026-09-22") and
+`last_activity_on`. Shown collapsed at the bottom of the CRM tab with Copy buttons; Krishna
+hands the plain list to whoever runs outbound. The `replied` group doubles as the re-engagement
+pool for leads that went quiet.
+
+Keep it current (upsert on `entry`): when a lead replies → `replied` (or `active` once there's
+real back-and-forth); becomes a client → `client`; says no / unsubscribes → `opted_out`; a
+policy/spam block → `blocked`; a hard "address not found" bounce → `dead_address` (the exact
+email only — the company may still be reachable). Never delete rows to "unblock" someone without
+Krishna asking. Refresh from Gmail + Apollo (read-only) when asked "update the do-not-contact list".
+
 ## Detecting outbound emails (Gmail scan)
 
 When asked to check outbound activity (e.g. "how'd outbound look this week", "log this week's
