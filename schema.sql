@@ -734,3 +734,6 @@ revoke all on public.numbers_snapshots from anon;
 do $$ begin
   alter publication supabase_realtime add table public.numbers_snapshots;
 exception when duplicate_object then null; end $$;
+
+-- Numbers v3: per-month cost sections {section: {sub-line: usd}} for the Costs by month table.
+alter table public.monthly_financials add column if not exists cost_breakdown jsonb not null default '{}'::jsonb;

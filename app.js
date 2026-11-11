@@ -2267,6 +2267,36 @@ function renderNumbers() {
     </table></div>
     <p class="muted num-note">Cash basis, all company accounts (Airwallex, Wing Lung, China CITIC); transfers between our own accounts and FX conversions excluded. Unidentified cheques (no payee on the statement, not a recurring amount) are NOT in opex — they’re shown separately until their payee is known; some may be factory payments, cash or draws.</p>` : "";
 
+  // costs by month, in sections with sub-lines (from bank statements)
+  const SECTION_ORDER = ["Consultation services", "Staff & contractors", "Rent", "Utilities & phone", "Software & subscriptions",
+    "Professional (accountant / legal)", "Shipping", "Marketing", "Tax", "Bank fees", "Reimbursements", "Other", "Director draws", "Loan payments"];
+  const cbMonths = rows.filter(r => r.cost_breakdown && Object.keys(r.cost_breakdown).length).sort((a, b) => a.d - b.d);
+  let costTable = "";
+  if (cbMonths.length) {
+    const sections = SECTION_ORDER.filter(s => cbMonths.some(r => r.cost_breakdown[s]))
+      .concat(Array.from(new Set(cbMonths.flatMap(r => Object.keys(r.cost_breakdown)))).filter(s => !SECTION_ORDER.includes(s)));
+    const val = (r, s, sub) => { const sec = r.cost_breakdown[s] || {}; return sub ? (num(sec[sub]) || 0) : Object.values(sec).reduce((t, v) => t + (num(v) || 0), 0); };
+    const avgCell = (s, sub) => fmtK(cbMonths.reduce((t, r) => t + val(r, s, sub), 0) / cbMonths.length);
+    const line = (s, sub, cls) => `<tr class="${cls}"><td class="company">${escapeHtml(sub || s)}</td>${cbMonths.map(r => { const v = val(r, s, sub); return `<td class="num-r">${v ? fmtK(v) : '<span class="muted">—</span>'}</td>`; }).join("")}<td class="num-r"><b>${avgCell(s, sub)}</b></td></tr>`;
+    let body = "";
+    sections.forEach((s, i) => {
+      if (s === "Director draws") body += `<tr class="num-sep"><td colspan="${cbMonths.length + 2}">Not operating costs — shown separately</td></tr>`;
+      body += line(s, null, "num-sec");
+      const subs = Array.from(new Set(cbMonths.flatMap(r => Object.keys(r.cost_breakdown[s] || {}))));
+      if (!(subs.length === 1 && subs[0] === s)) {
+        subs.sort((a, b) => cbMonths.reduce((t, r) => t + val(r, s, b), 0) - cbMonths.reduce((t, r) => t + val(r, s, a), 0))
+          .forEach(sub => { body += line(s, sub, "num-sub"); });
+      }
+    });
+    costTable = `
+    <h3 class="num-h">Costs by month (bank statements)</h3>
+    <div class="table-scroll"><table class="num-table num-costs">
+      <thead><tr><th>Section</th>${cbMonths.map(r => `<th class="num-r">${escapeHtml(monthName(r.d))}</th>`).join("")}<th class="num-r">Avg / month</th></tr></thead>
+      <tbody>${body}</tbody>
+    </table></div>
+    <p class="muted num-note">* Fitaye commission share is already deducted in “GP after commissions”, so it is not counted again in opex — only the Fitaye base fee is. Rent and some salaries / utilities are paid by cheque with no payee on the statement; recurring cheque amounts are shown as “probable”. Unidentified one-off cheques are not included. Rent cheques sometimes cover two months, so look at the average.</p>`;
+  }
+
   // client concentration + receivables (snapshot from the lead sheet)
   const cs = numbersSnaps.clients && numbersSnaps.clients.data;
   let clientPanel = "", arPanel = "";
@@ -2304,6 +2334,7 @@ function renderNumbers() {
       <tbody>${fyRows}${tr}</tbody>
     </table></div>
     <p class="muted num-note">Revenue &amp; gross profit: snapshot of the B2C Lead Management Sheet (tab “1”: deals at Sai Ram with cost &amp; revenue, by closed date). GM % excludes transit / pass-through revenue. Opex = bank-statement actuals excluding director draws (recurring cheques counted as probable rent &amp; salaries); <i>est.</i> = average of this FY’s actual months, used where statements aren’t in yet. True profit / burn = GP after commissions − opex.</p>
+    ${costTable}
     ${cfTable}
     <div class="num-grid">
       <div class="num-panel">

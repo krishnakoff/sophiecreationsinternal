@@ -672,6 +672,11 @@ Fiscal year starts in `FY_START_MONTH` in `app.js` (April; the B2C sheet's Dashb
   (11 Nov, Mar–Sep 2026): Wing Lung/CITIC cheques show no payee — recurring amounts HKD 52,000
   (probable rent), 15,675 / 11,950 / 17,000 (probable salaries), 1,650 / 949 / 2,718 (probable
   utilities) count as opex; other cheques stay "unidentified" (not opex) until Krishna names them.
+  Classification (Krishna, 11 Nov): consultation services = Fitaye (base + commission share),
+  Karen, Priscilla, Recelyn, Sai Gayatri (and Kayen); director draws = Sanjay + Anmol only;
+  Krishna's personal transfers = reimbursements (opex). `cost_breakdown` jsonb holds
+  {section: {sub-line: usd}} per month for the "Costs by month" table (loan payments split per loan:
+  CITIC trade finance, CITIC revolving loan, the two CITIC mortgages, Manish).
   Payments to Tourani Lalchand Manish = loan repayment (Manish); HK Shero Interior Decoration =
   goods (probably MBM displays — confirm). Fitaye base HKD 15k = staff; the rest of each Fitaye
   payment = commission (already netted in GP after commissions, not opex). Months without

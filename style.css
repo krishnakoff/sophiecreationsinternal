@@ -382,3 +382,7 @@ th.cash-amount{ font-family:var(--font-body); }
 .num-warn{ color:var(--amber); font-weight:600; }
 .num-cards{ grid-template-columns:repeat(8,1fr); }
 .num-table td, .num-table th{ padding:9px 10px; }
+.num-costs tr.num-sec td{ font-weight:600; background:var(--panel); }
+.num-costs tr.num-sub td{ color:var(--muted); font-size:12.5px; padding-top:5px; padding-bottom:5px; }
+.num-costs tr.num-sub td.company{ padding-left:28px; }
+.num-costs tr.num-sep td{ font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); padding-top:16px; }
