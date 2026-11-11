@@ -2194,9 +2194,10 @@ function renderNumbers() {
     const draws = num(r.director_draws_usd) ?? (opexActual === null && inFyRow ? drawsFallback : null);
     const gpNet = num(r.gross_profit_net_usd) ?? num(r.gross_profit_usd);
     const coreRev = num(r.revenue_usd) !== null ? num(r.revenue_usd) - (num(r.passthrough_revenue_usd) || 0) : null;
-    const trueProfit = gpNet === null || opex === null ? null : gpNet - opex;
+    const gpBase = num(r.gross_profit_usd) ?? gpNet;
+    const trueProfit = gpBase === null || opex === null ? null : gpBase - opex;
     return { ...r, d, partial: d.getTime() === curMonth.getTime(), inFy: d >= fyStart,
-      opexActual, opex, opexIsEst: opexActual === null && opex !== null, draws, gpNet, coreRev,
+      opexActual, opex, opexIsEst: opexActual === null && opex !== null, draws, gpNet, gpBase, coreRev,
       gm: coreRev ? num(r.gross_profit_usd) / coreRev : null,
       trueProfit, afterDraws: trueProfit === null ? null : trueProfit - (draws || 0) };
   }).sort((a, b) => b.d - a.d);
@@ -2208,14 +2209,16 @@ function renderNumbers() {
   const fyRev = sum(fyFull, r => r.revenue_usd);
   const fyOpex = sum(fyFull, r => r.opex);
   const fyDraws = sum(fyFull, r => r.draws);
-  const avgGpNet = fyGpNet / n, avgOpex = fyOpex / n, avgTrue = avgGpNet - avgOpex;
+  const avgGp = fyGp / n, avgOpex = fyOpex / n, avgTrue = avgGp - avgOpex;
   const avgDraws = avgOf(fyFull, r => r.draws);
   const avgAfterDraws = avgTrue - (avgDraws || 0);
   const fyGm = fyCoreRev ? fyGp / fyCoreRev : null;
-  const netMargin = fyCoreRev ? (fyGpNet - fyOpex) / fyCoreRev : null;
+  const netMargin = fyCoreRev ? (fyGp - fyOpex) / fyCoreRev : null;
   const profitableMonths = fyFull.filter(r => r.trueProfit !== null && r.trueProfit >= 0).length;
   const burnBase = avgOf(fyFull, r => r.opex) ?? opexEst;
   const runway = burnBase > 0 ? cashOnHand / (burnBase + (avgDraws || 0)) : null;
+  const fyCb = fyFull.filter(r => r.cost_breakdown && r.cost_breakdown['Consultation services']);
+  const consultShare = (() => { const c = fyCb.reduce((t, r) => t + Object.values(r.cost_breakdown['Consultation services']).reduce((a, v) => a + (num(v) || 0), 0), 0); const g = fyCb.reduce((t, r) => t + (num(r.gpBase) || 0), 0); return g ? c / g : null; })();
   const fyLabel = `FY ${fyYear}/${String((fyYear + 1) % 100).padStart(2, "0")}`;
   const fySince = fyStart.toLocaleDateString(undefined, { month: "short", year: "numeric" });
 
@@ -2226,8 +2229,8 @@ function renderNumbers() {
   document.getElementById("numbers-cards").innerHTML = [
     card(fmtK(cashOnHand), "Cash on hand", "", "bank balances logged"),
     card(fmtK(afterObligations), "Cash after obligations", afterObligations < 0 ? "c-garnet" : "c-emerald", "cash + owed to us − we owe"),
-    card(fmtK(avgGpNet), "Avg monthly gross profit", "", "after commissions, FY"),
-    card(fmtK(avgOpex), "Avg monthly opex", fyActual.length < fyFull.length ? "c-amber" : "", `excl. director draws · ${fyActual.length}/${fyFull.length} mo actual`),
+    card(fmtK(avgGp), "Avg monthly gross profit", "", "FY, before consultation fees"),
+    card(fmtK(avgOpex), "Avg monthly opex", fyActual.length < fyFull.length ? "c-amber" : "", `incl. consultation, excl. draws · ${fyActual.length}/${fyFull.length} mo actual`),
     card(fmtK(avgTrue), "Avg true profit / burn", avgTrue < 0 ? "c-garnet" : "c-emerald", "GP − opex, per month"),
     card(avgDraws === null ? "—" : fmtK(avgAfterDraws), "After director draws", avgAfterDraws < 0 ? "c-garnet" : "c-emerald", avgDraws === null ? "draws unknown" : `draws avg ${fmtK(avgDraws)}/mo`),
     card(fmtPct(fyGm), "Gross margin", "", "FY, excl. pass-through"),
@@ -2241,8 +2244,7 @@ function renderNumbers() {
       <td class="company">${escapeHtml(monthName(r.d))}${r.partial ? ' <span class="pill">month to date</span>' : ""}${r.notes ? `<div class="order-item">${escapeHtml(r.notes)}</div>` : ""}</td>
       <td class="num-r">${r.orders_count ?? "—"}</td>
       <td class="num-r">${fmtK(r.revenue_usd)}</td>
-      <td class="num-r">${fmtK(r.gross_profit_usd)}</td>
-      <td class="num-r"><b>${fmtK(r.gpNet)}</b></td>
+      <td class="num-r"><b>${fmtK(r.gpBase)}</b></td>
       <td class="num-r">${fmtPct(r.gm)}</td>
       <td class="num-r ${r.opexIsEst ? "muted" : ""}">${fmtK(r.opex)}${r.opexIsEst ? " <i>est.</i>" : ""}</td>
       <td class="num-r"><b class="${cls(r.trueProfit)}">${fmtK(r.trueProfit)}</b></td>
@@ -2251,8 +2253,8 @@ function renderNumbers() {
     </tr>`).join("");
   const fyOrders = sum(fyFull, r => r.orders_count);
   const fyRows = `
-    <tr class="num-total"><td class="company">${fyLabel} total · ${fyFull.length} full month(s)</td><td class="num-r">${fyOrders}</td><td class="num-r">${fmtK(fyRev)}</td><td class="num-r">${fmtK(fyGp)}</td><td class="num-r">${fmtK(fyGpNet)}</td><td class="num-r">${fmtPct(fyGm)}</td><td class="num-r">${fmtK(fyOpex)}</td><td class="num-r"><b class="${cls(fyGpNet - fyOpex)}">${fmtK(fyGpNet - fyOpex)}</b></td><td class="num-r">${fmtK(fyDraws)}</td><td class="num-r"><b class="${cls(fyGpNet - fyOpex - fyDraws)}">${fmtK(fyGpNet - fyOpex - fyDraws)}</b></td></tr>
-    <tr class="num-total"><td class="company">${fyLabel} monthly average</td><td class="num-r">${(fyOrders / n).toFixed(1)}</td><td class="num-r">${fmtK(fyRev / n)}</td><td class="num-r">${fmtK(fyGp / n)}</td><td class="num-r">${fmtK(avgGpNet)}</td><td class="num-r"></td><td class="num-r">${fmtK(avgOpex)}</td><td class="num-r"><b class="${cls(avgTrue)}">${fmtK(avgTrue)}</b></td><td class="num-r">${fmtK(avgDraws)}</td><td class="num-r"><b class="${cls(avgAfterDraws)}">${avgDraws === null ? "—" : fmtK(avgAfterDraws)}</b></td></tr>`;
+    <tr class="num-total"><td class="company">${fyLabel} total · ${fyFull.length} full month(s)</td><td class="num-r">${fyOrders}</td><td class="num-r">${fmtK(fyRev)}</td><td class="num-r"><b>${fmtK(fyGp)}</b></td><td class="num-r">${fmtPct(fyGm)}</td><td class="num-r">${fmtK(fyOpex)}</td><td class="num-r"><b class="${cls(fyGp - fyOpex)}">${fmtK(fyGp - fyOpex)}</b></td><td class="num-r">${fmtK(fyDraws)}</td><td class="num-r"><b class="${cls(fyGp - fyOpex - fyDraws)}">${fmtK(fyGp - fyOpex - fyDraws)}</b></td></tr>
+    <tr class="num-total"><td class="company">${fyLabel} monthly average</td><td class="num-r">${(fyOrders / n).toFixed(1)}</td><td class="num-r">${fmtK(fyRev / n)}</td><td class="num-r"><b>${fmtK(avgGp)}</b></td><td class="num-r"></td><td class="num-r">${fmtK(avgOpex)}</td><td class="num-r"><b class="${cls(avgTrue)}">${fmtK(avgTrue)}</b></td><td class="num-r">${fmtK(avgDraws)}</td><td class="num-r"><b class="${cls(avgAfterDraws)}">${avgDraws === null ? "—" : fmtK(avgAfterDraws)}</b></td></tr>`;
 
   // cash flow by month (bank statements, cash basis)
   const cfRows = rows.filter(r => num(r.receipts_usd) !== null || num(r.cogs_paid_usd) !== null);
@@ -2294,7 +2296,7 @@ function renderNumbers() {
       <thead><tr><th>Section</th>${cbMonths.map(r => `<th class="num-r">${escapeHtml(monthName(r.d))}</th>`).join("")}<th class="num-r">Avg / month</th></tr></thead>
       <tbody>${body}</tbody>
     </table></div>
-    <p class="muted num-note">* Fitaye commission share is already deducted in “GP after commissions”, so it is not counted again in opex — only the Fitaye base fee is. Rent and some salaries / utilities are paid by cheque with no payee on the statement; recurring cheque amounts are shown as “probable”. Unidentified one-off cheques are not included. Rent cheques sometimes cover two months, so look at the average.</p>`;
+    <p class="muted num-note">Rent and some salaries / utilities are paid by cheque with no payee on the statement; recurring cheque amounts are shown as “probable”. Unidentified one-off cheques are not included. Rent cheques sometimes cover two months, so look at the average.</p>`;
   }
 
   // client concentration + receivables (snapshot from the lead sheet)
@@ -2330,10 +2332,10 @@ function renderNumbers() {
   document.getElementById("numbers-body").innerHTML = `
     <h3 class="num-h">Monthly profit &amp; burn</h3>
     <div class="table-scroll"><table class="num-table">
-      <thead><tr><th>Month</th><th class="num-r">Orders</th><th class="num-r">Revenue</th><th class="num-r">Gross profit</th><th class="num-r">GP after commissions</th><th class="num-r">GM %</th><th class="num-r">Opex</th><th class="num-r">True profit / burn</th><th class="num-r">Director draws</th><th class="num-r">After draws</th></tr></thead>
+      <thead><tr><th>Month</th><th class="num-r">Orders</th><th class="num-r">Revenue</th><th class="num-r">Gross profit</th><th class="num-r">GM %</th><th class="num-r">Opex</th><th class="num-r">True profit / burn</th><th class="num-r">Director draws</th><th class="num-r">After draws</th></tr></thead>
       <tbody>${fyRows}${tr}</tbody>
     </table></div>
-    <p class="muted num-note">Revenue &amp; gross profit: snapshot of the B2C Lead Management Sheet (tab “1”: deals at Sai Ram with cost &amp; revenue, by closed date). GM % excludes transit / pass-through revenue. Opex = bank-statement actuals excluding director draws (recurring cheques counted as probable rent &amp; salaries); <i>est.</i> = average of this FY’s actual months, used where statements aren’t in yet. True profit / burn = GP after commissions − opex.</p>
+    <p class="muted num-note">Revenue &amp; gross profit: snapshot of the B2C Lead Management Sheet (tab “1”: deals at Sai Ram with cost &amp; revenue, by closed date). GM % excludes transit / pass-through revenue. Opex = bank-statement actuals excluding director draws (recurring cheques counted as probable rent &amp; salaries); <i>est.</i> = average of this FY’s actual months, used where statements aren’t in yet. True profit / burn = gross profit − opex. Consultation services (Fitaye, Sai Gayatri, Karen, Priscilla…) are all in opex, so gross profit here is before any consultation fees / commissions.</p>
     ${costTable}
     ${cfTable}
     <div class="num-grid">
@@ -2353,9 +2355,9 @@ function renderNumbers() {
         <table class="num-mini">
           <tr><td>Gross margin (excl. pass-through)</td><td class="num-r">${fmtPct(fyGm)}</td></tr>
           <tr><td>Net margin (true profit ÷ revenue)</td><td class="num-r">${fmtPct(netMargin)}</td></tr>
-          <tr><td>Commissions as % of gross profit</td><td class="num-r">${fmtPct(fyGp ? (fyGp - fyGpNet) / fyGp : null)}</td></tr>
-          <tr><td>Opex as % of gross profit</td><td class="num-r">${fmtPct(fyGpNet ? fyOpex / fyGpNet : null)}</td></tr>
-          <tr><td>Director draws as % of gross profit</td><td class="num-r">${fmtPct(fyGpNet && fyDraws ? fyDraws / fyGpNet : null)}</td></tr>
+          <tr><td>Consultation services as % of gross profit</td><td class="num-r">${fmtPct(consultShare)}</td></tr>
+          <tr><td>Opex as % of gross profit</td><td class="num-r">${fmtPct(fyGp ? fyOpex / fyGp : null)}</td></tr>
+          <tr><td>Director draws as % of gross profit</td><td class="num-r">${fmtPct(fyGp && fyDraws ? fyDraws / fyGp : null)}</td></tr>
           <tr><td>Break-even: GP needed / month (opex + draws)</td><td class="num-r">${fmtK(burnBase + (avgDraws || 0))}</td></tr>
           <tr><td>Months above break-even (GP − opex)</td><td class="num-r">${profitableMonths} / ${fyFull.length}</td></tr>
           <tr><td>Runway (cash on hand ÷ monthly opex + draws)</td><td class="num-r">${runway === null ? "—" : runway.toFixed(1) + " months"}</td></tr>
