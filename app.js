@@ -2153,16 +2153,32 @@ function fmtK(n) {
   return (v < 0 ? "−$" : "$") + Math.abs(v).toLocaleString("en-US", { maximumFractionDigits: 0 });
 }
 
+// Layout mirrors the training log: headline cards + plan/health/sessions panels on the left,
+// rolling 6-month tables on the right. Gross profit (as Krishna defines it) = revenue − (COGS +
+// Fitaye commission + shipping) = sheet "Gross Profit Z" (gross_profit_net_usd). Net profit =
+// gross profit BEFORE commission − opex, because opex already holds every Fitaye payment
+// (base + commission); starting from GP after commission would count the commission twice.
+const NX_SECTION_ORDER = ["Consultation services", "Staff & contractors", "Rent", "Utilities & phone", "Software & subscriptions",
+  "Professional (accountant / legal)", "Shipping", "Marketing", "Tax", "Bank fees", "Reimbursements", "Other"];
+const NX_NOT_OPEX = ["Director draws", "Loan payments"];
+// fixed = same amount every month whatever we sell; variable = moves with volume / usage.
+function nxTag(section, line) {
+  if (/mortgage|revolving/i.test(line)) return "fixed";
+  if (/trade finance/i.test(line)) return "variable";
+  if (/^cheque|office rent/i.test(line)) return "fixed";
+  return { "Rent": "fixed", "Utilities & phone": "fixed", "Software & subscriptions": "fixed",
+    "Professional (accountant / legal)": "fixed" }[section] || "variable";
+}
+
 function renderNumbers() {
   if (!numbersLoaded || !cashLoaded) return;
   const today = new Date();
   const num = v => (v === null || v === undefined || v === "") ? null : Number(v);
   const sum = (list, f) => list.reduce((t, x) => t + (num(f(x)) || 0), 0);
   const avgOf = (list, f) => { const v = list.map(f).map(num).filter(x => x !== null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+  const esc = escapeHtml;
 
-  // --- live cash health (from the Cash + B2C tabs) ---
-  // Client money held is a memo, not subtracted: the cost of delivering those goods is already in
-  // "we owe" (e.g. Eternity's 15k goes out via the ZOD payments), so subtracting both double counts.
+  // --- live cash (Cash + B2C tabs). Client money held is a memo: its factory cost is already in "we owe".
   const cashOnHand = sum(cashAccounts, a => a.balance_usd);
   const openOf = dir => cashItems.filter(c => c.direction === dir && !["paid", "cancelled", "deferred"].includes(c.status));
   const held = sum(openOf("held"), c => c.amount_usd);
@@ -2170,216 +2186,211 @@ function renderNumbers() {
   const owedToUs = sum(openOf("in"), c => c.amount_usd) + b2cOwedTotal().usd;
   const weOwe = sum(openOf("out"), c => c.amount_usd);
   const afterObligations = cashOnHand + owedToUs - weOwe;
-
-  // --- opex run-rate (estimate used where a month has no bank actuals) ---
   const opexEst = sum(opexBudget.filter(x => x.category !== "directors"), x => x.monthly_usd);
-  const opexMissing = opexBudget.filter(x => num(x.monthly_usd) === null);
-  const opexUnconfirmed = opexBudget.filter(x => !x.confirmed);
 
   // --- months ---
   const fyYear = today.getMonth() + 1 >= FY_START_MONTH ? today.getFullYear() : today.getFullYear() - 1;
   const fyStart = new Date(fyYear, FY_START_MONTH - 1, 1);
+  const fyEnd = new Date(fyYear + 1, FY_START_MONTH - 1, 0);
   const curMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-  // Months without bank statements use the average of this FY's actual months (falls back to the
-  // recurring-cost budget only if no month has actuals yet).
   const actualFyRaw = monthlyFin.filter(r => num(r.opex_usd) !== null && parseDate(r.month) >= fyStart);
   const avgRaw = f => actualFyRaw.length ? actualFyRaw.reduce((t, r) => t + (num(f(r)) || 0), 0) / actualFyRaw.length : null;
   const opexFallback = avgRaw(r => r.opex_usd) ?? opexEst;
   const drawsFallback = avgRaw(r => r.director_draws_usd);
+  const consultOf = r => r.cost_breakdown && r.cost_breakdown["Consultation services"]
+    ? Object.values(r.cost_breakdown["Consultation services"]).reduce((t, v) => t + (num(v) || 0), 0) : null;
   const rows = monthlyFin.map(r => {
     const d = parseDate(r.month);
     const opexActual = num(r.opex_usd);
-    const inFyRow = d >= fyStart;
-    const opex = opexActual !== null ? opexActual : (inFyRow ? opexFallback : null);
-    const draws = num(r.director_draws_usd) ?? (opexActual === null && inFyRow ? drawsFallback : null);
-    const gpNet = num(r.gross_profit_net_usd) ?? num(r.gross_profit_usd);
+    const inFy = d >= fyStart;
+    const opex = opexActual !== null ? opexActual : (inFy ? opexFallback : null);
+    const draws = num(r.director_draws_usd) ?? (opexActual === null && inFy ? drawsFallback : null);
+    const gp = num(r.gross_profit_net_usd) ?? num(r.gross_profit_usd);      // after commission (Krishna's GP)
+    const gpBase = num(r.gross_profit_usd) ?? gp;                          // before commission
     const coreRev = num(r.revenue_usd) !== null ? num(r.revenue_usd) - (num(r.passthrough_revenue_usd) || 0) : null;
-    const gpBase = num(r.gross_profit_usd) ?? gpNet;
-    const trueProfit = gpBase === null || opex === null ? null : gpBase - opex;
-    return { ...r, d, partial: d.getTime() === curMonth.getTime(), inFy: d >= fyStart,
-      opexActual, opex, opexIsEst: opexActual === null && opex !== null, draws, gpNet, gpBase, coreRev,
-      gm: coreRev ? num(r.gross_profit_usd) / coreRev : null,
-      trueProfit, afterDraws: trueProfit === null ? null : trueProfit - (draws || 0) };
+    const net = gpBase === null || opex === null ? null : gpBase - opex;
+    return { ...r, d, inFy, partial: d.getTime() === curMonth.getTime(), opexActual, opex,
+      opexIsEst: opexActual === null && opex !== null, draws, gp, gpBase, coreRev, net,
+      gm: coreRev && gp !== null ? gp / coreRev : null, consult: consultOf(r) };
   }).sort((a, b) => b.d - a.d);
-  const fyFull = rows.filter(r => r.inFy && r.d < curMonth);
-  const n = fyFull.length || 1;
-  const fyActual = fyFull.filter(r => !r.opexIsEst);
-  const fyGp = sum(fyFull, r => r.gross_profit_usd), fyGpNet = sum(fyFull, r => r.gpNet);
-  const fyCoreRev = sum(fyFull.filter(r => r.coreRev !== null), r => r.coreRev);
-  const fyRev = sum(fyFull, r => r.revenue_usd);
-  const fyOpex = sum(fyFull, r => r.opex);
-  const fyDraws = sum(fyFull, r => r.draws);
-  const avgGp = fyGp / n, avgOpex = fyOpex / n, avgTrue = avgGp - avgOpex;
+  const full = rows.filter(r => r.d < curMonth);
+  const last6 = full.slice(0, 6);
+  const fyAll = rows.filter(r => r.inFy);
+  const fyFull = full.filter(r => r.inFy);
+  const fyRev = sum(fyAll, r => r.revenue_usd), fyGp = sum(fyAll, r => r.gp);
+  const fyCoreRev = sum(fyAll.filter(r => r.coreRev !== null), r => r.coreRev);
+  const fyNet = sum(fyFull, r => r.net);
+  const fyFullCore = sum(fyFull.filter(r => r.coreRev !== null), r => r.coreRev);
+  const fyEstMonths = fyFull.filter(r => r.opexIsEst).length;
   const avgDraws = avgOf(fyFull, r => r.draws);
-  const avgAfterDraws = avgTrue - (avgDraws || 0);
-  const fyGm = fyCoreRev ? fyGp / fyCoreRev : null;
-  const netMargin = fyCoreRev ? (fyGp - fyOpex) / fyCoreRev : null;
-  const profitableMonths = fyFull.filter(r => r.trueProfit !== null && r.trueProfit >= 0).length;
   const burnBase = avgOf(fyFull, r => r.opex) ?? opexEst;
   const runway = burnBase > 0 ? cashOnHand / (burnBase + (avgDraws || 0)) : null;
-  const fyCb = fyFull.filter(r => r.cost_breakdown && r.cost_breakdown['Consultation services']);
-  const consultShare = (() => { const c = fyCb.reduce((t, r) => t + Object.values(r.cost_breakdown['Consultation services']).reduce((a, v) => a + (num(v) || 0), 0), 0); const g = fyCb.reduce((t, r) => t + (num(r.gpBase) || 0), 0); return g ? c / g : null; })();
+  const fyFullGpBase = sum(fyFull, r => r.gpBase), fyFullCoreRevGm = fyFullCore ? fyFullGpBase / fyFullCore : null;
+  const breakEvenRev = fyFullCoreRevGm ? (burnBase + (avgDraws || 0)) / fyFullCoreRevGm : null;
   const fyLabel = `FY ${fyYear}/${String((fyYear + 1) % 100).padStart(2, "0")}`;
-  const fySince = fyStart.toLocaleDateString(undefined, { month: "short", year: "numeric" });
+  const mShort = d => d.toLocaleDateString("en-GB", { month: "short", year: "numeric" });
+  const mOnly = d => d.toLocaleDateString("en-GB", { month: "short" });
+  const dayMs = 86400000;
+  const daysLeft = Math.max(0, Math.ceil((fyEnd - new Date(today.getFullYear(), today.getMonth(), today.getDate())) / dayMs));
+  const cls = v => v === null ? "" : v < 0 ? "short" : "ok";
+  const money = v => v === null || v === undefined ? '<span class="muted">—</span>' : fmtK(v);
+  const est = r => r.opexIsEst ? ' <i class="muted">est.</i>' : "";
+  const lastUpdated = monthlyFin.map(r => r.updated_at).filter(Boolean).sort().pop();
 
-  document.getElementById("numbers-subtitle").textContent =
-    `Numbers — key financial figures · ${fyLabel} from ${fySince} · ${fyFull.length} full month(s), ${fyActual.length} with bank-statement opex`;
-
-  const card = (val, label, cls, sub) => `<div class="card ${cls || ""}" style="cursor:default"><div class="num">${val}</div><div class="label">${label}${sub ? `<br><span class="muted">${sub}</span>` : ""}</div></div>`;
-  document.getElementById("numbers-cards").innerHTML = [
-    card(fmtK(cashOnHand), "Cash on hand", "", "bank balances logged"),
-    card(fmtK(afterObligations), "Cash after obligations", afterObligations < 0 ? "c-garnet" : "c-emerald", "cash + owed to us − we owe"),
-    card(fmtK(avgGp), "Avg monthly gross profit", "", "FY, before consultation fees"),
-    card(fmtK(avgOpex), "Avg monthly opex", fyActual.length < fyFull.length ? "c-amber" : "", `incl. consultation, excl. draws · ${fyActual.length}/${fyFull.length} mo actual`),
-    card(fmtK(avgTrue), "Avg true profit / burn", avgTrue < 0 ? "c-garnet" : "c-emerald", "GP − opex, per month"),
-    card(avgDraws === null ? "—" : fmtK(avgAfterDraws), "After director draws", avgAfterDraws < 0 ? "c-garnet" : "c-emerald", avgDraws === null ? "draws unknown" : `draws avg ${fmtK(avgDraws)}/mo`),
-    card(fmtPct(fyGm), "Gross margin", "", "FY, excl. pass-through"),
-    card(runway === null ? "—" : runway.toFixed(1) + " mo", "Runway", runway !== null && runway < 3 ? "c-garnet" : "", "cash ÷ (opex + draws)")
+  // --- headline cards ---
+  const card = (val, label, sub, c) => `<div class="nx-card"><div class="nx-val ${c || ""}">${val}</div><div class="nx-label">${label}</div>${sub ? `<div class="nx-sub">${sub}</div>` : ""}</div>`;
+  const lastMonth = full[0];
+  const lastActual = rows.find(r => r.opexActual !== null);
+  const avg6Rev = avgOf(last6, r => r.revenue_usd);
+  const avg6Opex = avgOf(last6.filter(r => !r.opexIsEst), r => r.opex);
+  const fyMonthsSoFar = fyAll.length;
+  const topCards = [
+    card(fmtK(fyRev), "Revenue", `${fyLabel} to date · ${fyMonthsSoFar} mo incl. ${mOnly(curMonth)} so far`),
+    card(fmtK(fyGp), "Gross profit", `revenue − (COGS + commission + shipping) · ${fmtPct(fyCoreRev ? fyGp / fyCoreRev : null)} margin`),
+    card(fmtK(fyNet), "Net profit", `GP − opex · ${fyFull.length} full mo${fyEstMonths ? `, ${fyEstMonths} est.` : ""} · ${fmtPct(fyFullCore ? fyNet / fyFullCore : null)} margin`, cls(fyNet)),
+    card(fmtK(cashOnHand), "Cash on hand", runway === null ? "bank balances logged" : `${runway.toFixed(1)} months runway at opex + draws`)
+  ].join("");
+  const wideCards = [
+    card(lastMonth ? fmtK(lastMonth.revenue_usd) : "—", `Revenue last month${lastMonth ? ` · ${mShort(lastMonth.d)}` : ""}`,
+      lastMonth ? `${lastMonth.orders_count ?? "?"} orders${num(lastMonth.passthrough_revenue_usd) ? ` · incl. ${fmtK(lastMonth.passthrough_revenue_usd)} pass-through` : ""} · 6-mo avg ${fmtK(avg6Rev)}` : ""),
+    card(lastActual ? fmtK(lastActual.opexActual) : "—", `Operating expenses${lastActual ? ` · ${mShort(lastActual.d)}` : ""}`,
+      `incl. all consultation services (Fitaye …) · excl. director draws · 6-mo avg ${fmtK(avg6Opex)}${lastActual && lastMonth && lastActual.d < lastMonth.d ? ` · ${mOnly(lastMonth.d)} statements not in yet` : ""}`)
   ].join("");
 
-  const monthName = d => d.toLocaleDateString(undefined, { month: "short", year: "numeric" });
-  const cls = v => v === null ? "" : v < 0 ? "short" : "ok";
-  const tr = rows.map(r => `
-    <tr class="${r.inFy ? "" : "num-prev"}">
-      <td class="company">${escapeHtml(monthName(r.d))}${r.partial ? ' <span class="pill">month to date</span>' : ""}${r.notes ? `<div class="order-item">${escapeHtml(r.notes)}</div>` : ""}</td>
-      <td class="num-r">${r.orders_count ?? "—"}</td>
-      <td class="num-r">${fmtK(r.revenue_usd)}</td>
-      <td class="num-r"><b>${fmtK(r.gpBase)}</b></td>
-      <td class="num-r">${fmtPct(r.gm)}</td>
-      <td class="num-r ${r.opexIsEst ? "muted" : ""}">${fmtK(r.opex)}${r.opexIsEst ? " <i>est.</i>" : ""}</td>
-      <td class="num-r"><b class="${cls(r.trueProfit)}">${fmtK(r.trueProfit)}</b></td>
-      <td class="num-r ${r.opexIsEst ? "muted" : ""}">${r.draws === null ? '<span class="muted">—</span>' : fmtK(r.draws) + (r.opexIsEst ? " <i>est.</i>" : "")}</td>
-      <td class="num-r">${r.draws === null ? '<span class="muted">—</span>' : `<b class="${cls(r.afterDraws)}">${fmtK(r.afterDraws)}</b>`}</td>
-    </tr>`).join("");
-  const fyOrders = sum(fyFull, r => r.orders_count);
-  const fyRows = `
-    <tr class="num-total"><td class="company">${fyLabel} total · ${fyFull.length} full month(s)</td><td class="num-r">${fyOrders}</td><td class="num-r">${fmtK(fyRev)}</td><td class="num-r"><b>${fmtK(fyGp)}</b></td><td class="num-r">${fmtPct(fyGm)}</td><td class="num-r">${fmtK(fyOpex)}</td><td class="num-r"><b class="${cls(fyGp - fyOpex)}">${fmtK(fyGp - fyOpex)}</b></td><td class="num-r">${fmtK(fyDraws)}</td><td class="num-r"><b class="${cls(fyGp - fyOpex - fyDraws)}">${fmtK(fyGp - fyOpex - fyDraws)}</b></td></tr>
-    <tr class="num-total"><td class="company">${fyLabel} monthly average</td><td class="num-r">${(fyOrders / n).toFixed(1)}</td><td class="num-r">${fmtK(fyRev / n)}</td><td class="num-r"><b>${fmtK(avgGp)}</b></td><td class="num-r"></td><td class="num-r">${fmtK(avgOpex)}</td><td class="num-r"><b class="${cls(avgTrue)}">${fmtK(avgTrue)}</b></td><td class="num-r">${fmtK(avgDraws)}</td><td class="num-r"><b class="${cls(avgAfterDraws)}">${avgDraws === null ? "—" : fmtK(avgAfterDraws)}</b></td></tr>`;
+  // --- recurring monthly expenses (6-month average from bank statements, tagged fixed / variable) ---
+  const cbWin = rows.filter(r => r.cost_breakdown && Object.keys(r.cost_breakdown).length).slice(0, 6); // newest first
+  const lines = {};
+  cbWin.forEach((r, i) => Object.entries(r.cost_breakdown).forEach(([s, subs]) => Object.entries(subs).forEach(([k, v]) => {
+    const key = s + "||" + k;
+    (lines[key] ||= { s, k, vals: Array(cbWin.length).fill(0) }).vals[i] += num(v) || 0;
+  })));
+  // Recurring = paid in at least 3 of the 6 months, or in both of the latest 2 (new hires).
+  const recurring = Object.values(lines).map(l => {
+    const paid = l.vals.filter(v => v > 0).length;
+    const lastIdx = l.vals.findIndex(v => v > 0);
+    return { ...l, paid, avg: l.vals.reduce((a, b) => a + b, 0) / cbWin.length, tag: nxTag(l.s, l.k),
+      stopped: l.vals[0] === 0 && l.vals[1] === 0, lastPaid: lastIdx >= 0 ? cbWin[lastIdx].d : null };
+  }).filter(l => l.paid >= 3 || (l.vals[0] > 0 && l.vals[1] > 0));
+  const winLabel = cbWin.length ? `${mOnly(cbWin[cbWin.length - 1].d)}–${mShort(cbWin[0].d)}` : "";
+  const groupRows = (sections, onlyActive) => sections.map(s => {
+    const ls = recurring.filter(l => l.s === s && l.stopped !== onlyActive).sort((a, b) => b.avg - a.avg);
+    if (!ls.length) return "";
+    return `<tr><th class="nx-day">${esc(s.replace(" (accountant / legal)", ""))}</th><td><ul class="nx-items">${ls.map(l => `
+      <li><span class="nx-item">${esc(l.k === s ? s : l.k)}${l.stopped && l.lastPaid ? ` <span class="muted">· last paid ${esc(mOnly(l.lastPaid))}</span>` : ""}</span>
+      <span class="nx-tag nx-${l.tag}">${l.tag}</span><span class="num-r">${fmtK(l.avg)}</span></li>`).join("")}</ul></td></tr>`;
+  }).join("");
+  const opexSections = NX_SECTION_ORDER.concat(Array.from(new Set(recurring.map(l => l.s))).filter(s => !NX_SECTION_ORDER.includes(s) && !NX_NOT_OPEX.includes(s)));
+  const activeOpex = recurring.filter(l => !l.stopped && !NX_NOT_OPEX.includes(l.s));
+  const totFixed = sum(activeOpex.filter(l => l.tag === "fixed"), l => l.avg), totVar = sum(activeOpex.filter(l => l.tag === "variable"), l => l.avg);
+  const stoppedRows = groupRows(opexSections.concat(NX_NOT_OPEX), false);
+  const recurringPanel = cbWin.length ? `
+    <div class="nx-panel">
+      <h3>Recurring monthly expenses</h3>
+      <div class="nx-cap">6-month average per line, ${esc(winLabel)} bank statements. Recurring = paid in 3+ of the 6 months, or in each of the last two.</div>
+      <div class="nx-split">
+        <div><span class="nx-tag nx-fixed">fixed</span> ${fmtK(totFixed)}<span class="muted">/mo</span></div>
+        <div><span class="nx-tag nx-variable">variable</span> ${fmtK(totVar)}<span class="muted">/mo</span></div>
+        <div><b>${fmtK(totFixed + totVar)}</b><span class="muted">/mo recurring opex</span></div>
+      </div>
+      <table class="nx-plan">${groupRows(opexSections, true)}</table>
+      <div class="nx-subhead">Also recurring, not operating costs</div>
+      <table class="nx-plan">${groupRows(NX_NOT_OPEX, true)}</table>
+      ${stoppedRows ? `<div class="nx-subhead">Stopped — nothing paid in the last 2 months</div><table class="nx-plan nx-stopped">${stoppedRows}</table>` : ""}
+      <p class="nx-foot">Fixed = same every month whatever we sell (rent, salaries by cheque, utilities, software, mortgages, revolving loan). Variable = moves with sales or usage (Fitaye base + commission, consultants, contractors, card, bank fees, shipping, draws). Rent, salary and utility cheques have no payee on the statement — recurring amounts are counted as probable. Rent cheques often cover two months, hence the average; the sublet income that brings our share to ~$3k isn't netted here.</p>
+    </div>` : "";
 
-  // cash flow by month (bank statements, cash basis)
-  const cfRows = rows.filter(r => num(r.receipts_usd) !== null || num(r.cogs_paid_usd) !== null);
-  const cfTable = cfRows.length ? `
-    <h3 class="num-h">Cash flow by month (bank statements)</h3>
-    <div class="table-scroll"><table class="num-table">
-      <thead><tr><th>Month</th><th class="num-r">Received from clients</th><th class="num-r">Paid to factories</th><th class="num-r">Opex</th><th class="num-r">Director draws</th><th class="num-r">Loan repayments</th><th class="num-r">Net cash flow</th><th class="num-r">Unidentified cheques</th></tr></thead>
-      <tbody>${cfRows.map(r => {
-        const net = (num(r.receipts_usd) || 0) - (num(r.cogs_paid_usd) || 0) - (num(r.opex_usd) || 0) - (num(r.director_draws_usd) || 0) - (num(r.loan_repayments_usd) || 0);
-        return `<tr><td class="company">${escapeHtml(monthName(r.d))}</td><td class="num-r">${fmtK(r.receipts_usd)}</td><td class="num-r">${fmtK(r.cogs_paid_usd)}</td><td class="num-r">${fmtK(r.opex_usd)}</td><td class="num-r">${fmtK(r.director_draws_usd)}</td><td class="num-r">${fmtK(r.loan_repayments_usd)}</td><td class="num-r"><b class="${cls(net)}">${fmtK(net)}</b></td><td class="num-r ${num(r.unidentified_cheques_usd) ? "num-warn" : "muted"}">${fmtK(r.unidentified_cheques_usd)}</td></tr>`;
-      }).join("")}</tbody>
-    </table></div>
-    <p class="muted num-note">Cash basis, all company accounts (Airwallex, Wing Lung, China CITIC); transfers between our own accounts and FX conversions excluded. Unidentified cheques (no payee on the statement, not a recurring amount) are NOT in opex — they’re shown separately until their payee is known; some may be factory payments, cash or draws.</p>` : "";
+  // --- cash health (in place of training health) ---
+  const cfRows = rows.filter(r => num(r.receipts_usd) !== null || num(r.cogs_paid_usd) !== null).slice(0, 6);
+  const metric = (label, val, sub, c) => `<div class="nx-metric"><div class="nx-mlabel">${label}</div><div class="nx-mval ${c || ""}">${val}</div><div class="nx-msub">${sub}</div></div>`;
+  const healthPanel = `
+    <div class="nx-panel">
+      <h3>Cash health</h3>
+      <div class="nx-cap">Live from the Cash tab, plus monthly cash flow from bank statements (cash basis, own-account transfers and FX excluded).</div>
+      <div class="nx-metrics">
+        ${metric("After obligations", fmtK(afterObligations), "cash + owed to us − we owe", cls(afterObligations))}
+        ${metric("Runway", runway === null ? "—" : runway.toFixed(1) + " mo", "cash ÷ (avg opex + draws)", runway !== null && runway < 3 ? "short" : "")}
+        ${metric("Break-even", fmtK(burnBase + (avgDraws || 0)), `GP / month to cover opex + draws ≈ ${fmtK(breakEvenRev)} revenue`)}
+        ${metric("Owed to us", fmtK(owedToUs), `we owe ${fmtK(weOwe)} · held ${fmtK(held)}`)}
+      </div>
+      ${cfRows.length ? `<div class="table-scroll"><table class="nx-table">
+        <thead><tr><th>Month</th><th class="num-r">From clients</th><th class="num-r">To factories</th><th class="num-r">Opex</th><th class="num-r">Draws</th><th class="num-r">Loans</th><th class="num-r">Net cash</th></tr></thead>
+        <tbody>${cfRows.map(r => {
+          const net = (num(r.receipts_usd) || 0) - (num(r.cogs_paid_usd) || 0) - (num(r.opex_usd) || 0) - (num(r.director_draws_usd) || 0) - (num(r.loan_repayments_usd) || 0);
+          return `<tr><td>${esc(mShort(r.d))}</td><td class="num-r">${money(r.receipts_usd)}</td><td class="num-r">${money(r.cogs_paid_usd)}</td><td class="num-r">${money(r.opex_usd)}</td><td class="num-r">${money(r.director_draws_usd)}</td><td class="num-r">${money(r.loan_repayments_usd)}</td><td class="num-r"><b class="${cls(net)}">${fmtK(net)}</b></td></tr>`;
+        }).join("")}</tbody></table></div>` : ""}
+      <p class="nx-foot">Memo: deferred payments ${fmtK(deferredOut)} (not counted above). Unidentified cheques (no payee, not a recurring amount) aren't in opex until named${(() => { const u = sum(cfRows, r => r.unidentified_cheques_usd); return u ? ` — ${fmtK(u)} over these months` : ""; })()}.</p>
+    </div>`;
 
-  // costs by month, in sections with sub-lines (from bank statements)
-  const SECTION_ORDER = ["Consultation services", "Staff & contractors", "Rent", "Utilities & phone", "Software & subscriptions",
-    "Professional (accountant / legal)", "Shipping", "Marketing", "Tax", "Bank fees", "Reimbursements", "Other", "Director draws", "Loan payments"];
-  const cbMonths = rows.filter(r => r.cost_breakdown && Object.keys(r.cost_breakdown).length).sort((a, b) => a.d - b.d);
-  let costTable = "";
-  if (cbMonths.length) {
-    const sections = SECTION_ORDER.filter(s => cbMonths.some(r => r.cost_breakdown[s]))
-      .concat(Array.from(new Set(cbMonths.flatMap(r => Object.keys(r.cost_breakdown)))).filter(s => !SECTION_ORDER.includes(s)));
-    const val = (r, s, sub) => { const sec = r.cost_breakdown[s] || {}; return sub ? (num(sec[sub]) || 0) : Object.values(sec).reduce((t, v) => t + (num(v) || 0), 0); };
-    const avgCell = (s, sub) => fmtK(cbMonths.reduce((t, r) => t + val(r, s, sub), 0) / cbMonths.length);
-    const line = (s, sub, cls) => `<tr class="${cls}"><td class="company">${escapeHtml(sub || s)}</td>${cbMonths.map(r => { const v = val(r, s, sub); return `<td class="num-r">${v ? fmtK(v) : '<span class="muted">—</span>'}</td>`; }).join("")}<td class="num-r"><b>${avgCell(s, sub)}</b></td></tr>`;
-    let body = "";
-    sections.forEach((s, i) => {
-      if (s === "Director draws") body += `<tr class="num-sep"><td colspan="${cbMonths.length + 2}">Not operating costs — shown separately</td></tr>`;
-      body += line(s, null, "num-sec");
-      const subs = Array.from(new Set(cbMonths.flatMap(r => Object.keys(r.cost_breakdown[s] || {}))));
-      if (!(subs.length === 1 && subs[0] === s)) {
-        subs.sort((a, b) => cbMonths.reduce((t, r) => t + val(r, s, b), 0) - cbMonths.reduce((t, r) => t + val(r, s, a), 0))
-          .forEach(sub => { body += line(s, sub, "num-sub"); });
-      }
-    });
-    costTable = `
-    <h3 class="num-h">Costs by month (bank statements)</h3>
-    <div class="table-scroll"><table class="num-table num-costs">
-      <thead><tr><th>Section</th>${cbMonths.map(r => `<th class="num-r">${escapeHtml(monthName(r.d))}</th>`).join("")}<th class="num-r">Avg / month</th></tr></thead>
-      <tbody>${body}</tbody>
-    </table></div>
-    <p class="muted num-note">Rent and some salaries / utilities are paid by cheque with no payee on the statement; recurring cheque amounts are shown as “probable”. Unidentified one-off cheques are not included. Rent cheques sometimes cover two months, so look at the average.</p>`;
-  }
+  // --- months (in place of sessions): click one to see everything logged that month ---
+  const sec = r => r.cost_breakdown || {};
+  const secTotal = (r, s) => Object.values(sec(r)[s] || {}).reduce((t, v) => t + (num(v) || 0), 0);
+  const monthDetail = r => {
+    const kv = (k, v) => `<tr><td>${k}</td><td class="num-r">${v}</td></tr>`;
+    const costs = Object.keys(sec(r)).length ? NX_SECTION_ORDER.concat(NX_NOT_OPEX, Object.keys(sec(r)).filter(s => !NX_SECTION_ORDER.includes(s) && !NX_NOT_OPEX.includes(s)))
+      .filter(s => sec(r)[s]).map(s => `<tr class="nx-dsec"><td>${esc(s)}${NX_NOT_OPEX.includes(s) ? ' <span class="muted">· not opex</span>' : ""}</td><td class="num-r">${fmtK(secTotal(r, s))}</td></tr>` +
+        (Object.keys(sec(r)[s]).length > 1 || Object.keys(sec(r)[s])[0] !== s ? Object.entries(sec(r)[s]).filter(([, v]) => num(v)).sort((a, b) => b[1] - a[1]).map(([k, v]) => `<tr class="nx-dsub"><td>${esc(k)}</td><td class="num-r">${fmtK(v)}</td></tr>`).join("") : "")).join("") : "";
+    return `<div class="nx-detail"><table class="nx-mini">
+      ${kv("Orders", r.orders_count ?? "—")}
+      ${kv("Revenue", money(r.revenue_usd) + (num(r.passthrough_revenue_usd) ? ` <span class="muted">incl. ${fmtK(r.passthrough_revenue_usd)} pass-through</span>` : ""))}
+      ${kv("Gross profit (after commission)", money(r.gp) + (r.gm !== null ? ` <span class="muted">${fmtPct(r.gm)}</span>` : ""))}
+      ${kv("Gross profit before commission", money(r.gpBase))}
+      ${kv("Opex", money(r.opex) + est(r))}
+      ${kv("<b>Net profit</b>", `<b class="${cls(r.net)}">${money(r.net)}</b>`)}
+      ${r.draws !== null ? kv("Director draws", fmtK(r.draws) + est(r)) : ""}
+    </table>${costs ? `<div class="nx-subhead">Costs paid (bank statements)</div><table class="nx-mini nx-dcosts">${costs}</table>` : ""}${r.notes ? `<p class="nx-foot">${esc(r.notes)}</p>` : ""}</div>`;
+  };
+  const monthsPanel = `
+    <div class="nx-panel">
+      <h3>Months</h3>
+      <div class="nx-cap">Click a month to see everything logged in it.</div>
+      ${rows.map(r => `<details class="nx-month"><summary><span>${esc(mShort(r.d))}${r.partial ? ' <span class="muted">· to date</span>' : ""}${r.inFy ? "" : ' <span class="muted">· prev FY</span>'}</span>
+        <span class="nx-msum">Revenue ${money(r.revenue_usd)} · Net <b class="${cls(r.net)}">${money(r.net)}</b>${est(r)}</span></summary>${monthDetail(r)}</details>`).join("")}
+    </div>`;
 
-  // client concentration + receivables (snapshot from the lead sheet)
+  // --- right column: rolling 6 months ---
+  const sideTable = (title, cap, head, body) => `<div class="nx-panel"><h3>${title}</h3><div class="nx-cap">${cap}</div><table class="nx-table nx-side"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+  const right = [
+    sideTable("Monthly net profit", "Gross profit before commission − opex · last 6 months.",
+      `<th>Month</th><th class="num-r">Opex</th><th class="num-r">Net profit</th>`,
+      last6.map(r => `<tr><td>${esc(mShort(r.d))}</td><td class="num-r ${r.opexIsEst ? "muted" : ""}">${money(r.opex)}${est(r)}</td><td class="num-r"><b class="${cls(r.net)}">${money(r.net)}</b></td></tr>`).join("") +
+      `<tr class="nx-tot"><td>6-mo avg</td><td class="num-r">${fmtK(avgOf(last6, r => r.opex))}</td><td class="num-r"><b class="${cls(avgOf(last6, r => r.net))}">${fmtK(avgOf(last6, r => r.net))}</b></td></tr>`),
+    sideTable("Monthly gross profit", "Revenue − (COGS + commission + shipping) · last 6 months.",
+      `<th>Month</th><th class="num-r">Revenue</th><th class="num-r">Gross profit</th><th class="num-r">GM</th>`,
+      last6.map(r => `<tr><td>${esc(mShort(r.d))}</td><td class="num-r">${money(r.revenue_usd)}</td><td class="num-r"><b>${money(r.gp)}</b></td><td class="num-r muted">${fmtPct(r.gm)}</td></tr>`).join("") +
+      `<tr class="nx-tot"><td>6-mo avg</td><td class="num-r">${fmtK(avgOf(last6, r => r.revenue_usd))}</td><td class="num-r"><b>${fmtK(avgOf(last6, r => r.gp))}</b></td><td></td></tr>`),
+    sideTable("Monthly operating expenses", "Incl. all consultation services, excl. director draws · last 6 months.",
+      `<th>Month</th><th class="num-r">Opex</th><th class="num-r">Consultation</th>`,
+      last6.map(r => `<tr><td>${esc(mShort(r.d))}</td><td class="num-r ${r.opexIsEst ? "muted" : ""}">${money(r.opex)}${est(r)}</td><td class="num-r muted">${r.consult === null ? "—" : fmtK(r.consult)}</td></tr>`).join("") +
+      `<tr class="nx-tot"><td>6-mo avg</td><td class="num-r">${fmtK(avgOf(last6, r => r.opex))}</td><td class="num-r">${fmtK(avgOf(last6, r => r.consult))}</td></tr>`)
+  ];
   const cs = numbersSnaps.clients && numbersSnaps.clients.data;
-  let clientPanel = "", arPanel = "";
   if (cs) {
-    const conc = cs.concentration || [];
-    const top1 = conc[0], top3 = conc.slice(0, 3).reduce((t, c) => t + c.share, 0);
-    clientPanel = `
-      <div class="num-panel">
-        <h3 class="num-h">Client concentration · gross profit ${escapeHtml(cs.fy_from.slice(0, 7))} → ${escapeHtml(cs.fy_to.slice(0, 7))}</h3>
-        <table class="num-mini">
-          ${conc.map(c => `<tr><td>${escapeHtml(c.client)} <span class="muted">· ${escapeHtml(c.pipeline)} · ${c.deals} deal${c.deals === 1 ? "" : "s"}</span></td><td class="num-r">${fmtK(c.gp)}</td><td class="num-r ${c.share >= 0.25 ? "num-warn" : ""}">${fmtPct(c.share)}</td></tr>`).join("")}
-          <tr><td class="muted">${cs.clients_total - conc.length} other clients</td><td class="num-r muted">${fmtK(cs.others_gp)}</td><td class="num-r muted">${fmtPct(cs.others_gp / cs.fy_gp_all_closed)}</td></tr>
-          <tr class="num-total"><td>Top client · top 3</td><td class="num-r"></td><td class="num-r">${fmtPct(top1 && top1.share)} · ${fmtPct(top3)}</td></tr>
-        </table>
-        <p class="muted num-note">All deals closed in the FY (any stage), so totals run higher than the “Sai Ram + costed” figures in the monthly table. Above 25% from one client = concentration risk. B2B ${fmtK(cs.pipeline_gp.B2B)} · B2C ${fmtK(cs.pipeline_gp["B2C Offline"])}.</p>
-      </div>`;
     const up = cs.unpaid || [];
-    arPanel = `
-      <div class="num-panel">
-        <h3 class="num-h">Unpaid invoices: ${fmtK(cs.unpaid_total)} · ${up.length}</h3>
-        <table class="num-mini">
-          ${up.map(u => `<tr><td>${escapeHtml(u.client)} <span class="muted">· ${escapeHtml(u.si || "")}</span></td><td class="num-r">${fmtK(u.revenue)}</td><td class="num-r ${u.age_days > 60 ? "num-warn" : "muted"}">${u.age_days ?? "?"}d</td></tr>`).join("")}
-          <tr class="num-total"><td>Order cycle (opened → closed)</td><td class="num-r"></td><td class="num-r">${cs.cycle_days.median}d median</td></tr>
-        </table>
-        <p class="muted num-note">From the lead sheet’s “Unpaid” status, snapshot ${escapeHtml(numbersSnaps.clients.as_of)}. Age = days since the deal was opened. Mean cycle ${cs.cycle_days.mean}d over ${cs.cycle_days.n} deals.</p>
-      </div>`;
+    right.push(sideTable(`Unpaid invoices · ${fmtK(cs.unpaid_total)}`, `From the lead sheet, snapshot ${esc(numbersSnaps.clients.as_of)}. Age = days since the deal opened.`,
+      `<th>Client</th><th class="num-r">Amount</th><th class="num-r">Age</th>`,
+      up.map(u => `<tr><td>${esc(u.client)}${u.si ? ` <span class="muted">${esc(u.si)}</span>` : ""}</td><td class="num-r">${fmtK(u.revenue)}</td><td class="num-r ${u.age_days > 60 ? "num-warn" : "muted"}">${u.age_days ?? "?"}d</td></tr>`).join("")));
+    const conc = cs.concentration || [];
+    right.push(sideTable("Client concentration", `Share of FY gross profit, ${esc(cs.fy_from.slice(0, 7))} → ${esc(cs.fy_to.slice(0, 7))}. Over 25% from one client = risk.`,
+      `<th>Client</th><th class="num-r">GP</th><th class="num-r">Share</th>`,
+      conc.map(c => `<tr><td>${esc(c.client)}</td><td class="num-r">${fmtK(c.gp)}</td><td class="num-r ${c.share >= 0.25 ? "num-warn" : "muted"}">${fmtPct(c.share)}</td></tr>`).join("") +
+      `<tr class="nx-tot"><td>${cs.clients_total - conc.length} others</td><td class="num-r">${fmtK(cs.others_gp)}</td><td class="num-r">${fmtPct(cs.others_gp / cs.fy_gp_all_closed)}</td></tr>`));
   }
-
-  const opexRows = opexBudget.map(x => `<tr><td>${escapeHtml(x.label)}${x.confirmed ? "" : ' <span class="pill pill-cash-planned">to confirm</span>'}${x.basis ? `<div class="order-item">${escapeHtml(x.basis)}</div>` : ""}</td><td class="num-r">${num(x.monthly_usd) === null ? '<span class="muted">?</span>' : fmtK(x.monthly_usd)}</td></tr>`).join("");
 
   document.getElementById("numbers-body").innerHTML = `
-    <h3 class="num-h">Monthly profit &amp; burn</h3>
-    <div class="table-scroll"><table class="num-table">
-      <thead><tr><th>Month</th><th class="num-r">Orders</th><th class="num-r">Revenue</th><th class="num-r">Gross profit</th><th class="num-r">GM %</th><th class="num-r">Opex</th><th class="num-r">True profit / burn</th><th class="num-r">Director draws</th><th class="num-r">After draws</th></tr></thead>
-      <tbody>${fyRows}${tr}</tbody>
-    </table></div>
-    <p class="muted num-note">Revenue &amp; gross profit: snapshot of the B2C Lead Management Sheet (tab “1”: deals at Sai Ram with cost &amp; revenue, by closed date). GM % excludes transit / pass-through revenue. Opex = bank-statement actuals excluding director draws (recurring cheques counted as probable rent &amp; salaries); <i>est.</i> = average of this FY’s actual months, used where statements aren’t in yet. True profit / burn = gross profit − opex. Consultation services (Fitaye, Sai Gayatri, Karen, Priscilla…) are all in opex, so gross profit here is before any consultation fees / commissions.</p>
-    ${costTable}
-    ${cfTable}
-    <div class="num-grid">
-      <div class="num-panel">
-        <h3 class="num-h">Cash health (live)</h3>
-        <table class="num-mini">
-          <tr><td>Cash on hand</td><td class="num-r">${fmtK(cashOnHand)}</td></tr>
-          <tr><td>+ Owed to us (expected in + B2C unpaid)</td><td class="num-r">${fmtK(owedToUs)}</td></tr>
-          <tr><td>− We owe (unpaid out)</td><td class="num-r">${fmtK(weOwe)}</td></tr>
-          <tr class="num-total"><td>= Cash after obligations</td><td class="num-r"><b class="${cls(afterObligations)}">${fmtK(afterObligations)}</b></td></tr>
-          <tr class="num-memo"><td>Memo: client money held (goods still owed — their factory cost is in “we owe” or deferred)</td><td class="num-r">${fmtK(held)}</td></tr>
-          <tr class="num-memo"><td>Memo: deferred payments (not counted above)</td><td class="num-r">${fmtK(deferredOut)}</td></tr>
-        </table>
+    <div class="nx-head">
+      <div><h2>Sophie Numbers</h2><div class="nx-gen">${lastUpdated ? `Figures updated ${esc(new Date(lastUpdated).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }))}` : ""}</div></div>
+      <div class="nx-count"><div class="nx-ckick">${esc(fyLabel)} · ends ${esc(fyEnd.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }))}</div><div class="nx-cbig">${daysLeft} days</div><div class="nx-gen">left in the fiscal year</div></div>
+    </div>
+    <div class="nx-grid">
+      <div class="nx-main">
+        <div class="nx-kicker">This fiscal year · ${esc(fyLabel)}</div>
+        <div class="nx-cards4">${topCards}</div>
+        <div class="nx-cards2">${wideCards}</div>
+        ${recurringPanel}
+        ${healthPanel}
+        ${monthsPanel}
       </div>
-      <div class="num-panel">
-        <h3 class="num-h">Key ratios (${fyLabel})</h3>
-        <table class="num-mini">
-          <tr><td>Gross margin (excl. pass-through)</td><td class="num-r">${fmtPct(fyGm)}</td></tr>
-          <tr><td>Net margin (true profit ÷ revenue)</td><td class="num-r">${fmtPct(netMargin)}</td></tr>
-          <tr><td>Consultation services as % of gross profit</td><td class="num-r">${fmtPct(consultShare)}</td></tr>
-          <tr><td>Opex as % of gross profit</td><td class="num-r">${fmtPct(fyGp ? fyOpex / fyGp : null)}</td></tr>
-          <tr><td>Director draws as % of gross profit</td><td class="num-r">${fmtPct(fyGp && fyDraws ? fyDraws / fyGp : null)}</td></tr>
-          <tr><td>Break-even: GP needed / month (opex + draws)</td><td class="num-r">${fmtK(burnBase + (avgDraws || 0))}</td></tr>
-          <tr><td>Months above break-even (GP − opex)</td><td class="num-r">${profitableMonths} / ${fyFull.length}</td></tr>
-          <tr><td>Runway (cash on hand ÷ monthly opex + draws)</td><td class="num-r">${runway === null ? "—" : runway.toFixed(1) + " months"}</td></tr>
-        </table>
-      </div>
-      ${clientPanel}
-      ${arPanel}
-      <div class="num-panel">
-        <h3 class="num-h">Known recurring costs: ${fmtK(opexEst)}/mo${opexMissing.length ? ` + ${opexMissing.length} unknown` : ""} · actual avg ${fmtK(opexFallback)}</h3>
-        <table class="num-mini">${opexRows}</table>
-        <p class="muted num-note">The gap to the actual average is mostly rent and salaries paid by cheque, plus card spend and one-offs. ${opexUnconfirmed.length} item(s) to confirm. Factory / goods payments are cost of goods, not opex.</p>
-      </div>
-      <div class="num-panel">
-        <h3 class="num-h">Hormozi growth numbers</h3>
-        <table class="num-mini">
-          <tr><td>CAC (cost to win one client)</td><td class="num-r muted">not tracked yet</td></tr>
-          <tr><td>LTGP (lifetime gross profit per client)</td><td class="num-r muted">see concentration</td></tr>
-          <tr><td>LTGP : CAC (≥ 3:1; aim 6:1+)</td><td class="num-r muted">not tracked yet</td></tr>
-          <tr><td>30-day cash vs CAC (≥ 1×)</td><td class="num-r muted">not tracked yet</td></tr>
-        </table>
-        <p class="muted num-note">Needs acquisition spend tagged (Apollo, fairs, commissions, free samples) — next phase.</p>
-      </div>
+      <div class="nx-side-col">${right.join("")}</div>
     </div>`;
 }
 
