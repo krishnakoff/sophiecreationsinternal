@@ -665,6 +665,19 @@ Fiscal year starts in `FY_START_MONTH` in `app.js` (April; the B2C sheet's Dashb
   utilities, bank fees, director draws). Their sum = the **estimated** monthly opex run-rate used
   for runway, break-even and true profit wherever a month has no actual opex. `confirmed = false`
   rows show "to confirm". Factory / goods payments are cost of goods, never opex.
+- **Bank-statement actuals (v2):** `monthly_financials` also holds per-month cash-basis totals from
+  ALL company accounts (Airwallex, Wing Lung, China CITIC; own-account transfers + FX excluded):
+  `opex_usd` (excl. director draws), `director_draws_usd`, `cogs_paid_usd`, `receipts_usd`,
+  `loan_repayments_usd`, `unidentified_cheques_usd`, `opex_breakdown`, `opex_source`. Rules used
+  (11 Nov, Mar–Sep 2026): Wing Lung/CITIC cheques show no payee — recurring amounts HKD 52,000
+  (probable rent), 15,675 / 11,950 / 17,000 (probable salaries), 1,650 / 949 / 2,718 (probable
+  utilities) count as opex; other cheques stay "unidentified" (not opex) until Krishna names them.
+  Payments to Tourani Lalchand Manish = loan repayment (Manish); HK Shero Interior Decoration =
+  goods (probably MBM displays — confirm). Fitaye base HKD 15k = staff; the rest of each Fitaye
+  payment = commission (already netted in GP after commissions, not opex). Months without
+  statements use the average of this FY's actual months (marked *est.*).
+- `public.numbers_snapshots` (key `clients`): client concentration, order cycle and unpaid
+  invoices computed from the lead sheet's Lead Tracker (read-only export). Refresh when asked.
 - The tab computes: cash on hand, cash after obligations (cash + owed to us − we owe; client money
   held shown as a memo so it isn't double-counted), monthly + FY gross profit, GM %, opex, true
   profit / burn (GP after commissions − opex), commissions % of GP, opex % of GP, break-even,

@@ -172,6 +172,7 @@ function subscribeRealtime() {
   sb.channel("public:numbers")
     .on("postgres_changes", { event: "*", schema: "public", table: "monthly_financials" }, loadNumbers)
     .on("postgres_changes", { event: "*", schema: "public", table: "opex_budget" }, loadNumbers)
+    .on("postgres_changes", { event: "*", schema: "public", table: "numbers_snapshots" }, loadNumbers)
     .subscribe();
 }
 
@@ -2126,17 +2127,21 @@ function initOutlineEditing() {
 const FY_START_MONTH = 4; // April
 let monthlyFin = [];
 let opexBudget = [];
+let numbersSnaps = {};
 let numbersLoaded = false;
 
 async function loadNumbers() {
-  const [m, o] = await Promise.all([
+  const [m, o, s] = await Promise.all([
     sb.from("monthly_financials").select("*").order("month", { ascending: false }),
-    sb.from("opex_budget").select("*").eq("active", true).order("position")
+    sb.from("opex_budget").select("*").eq("active", true).order("position"),
+    sb.from("numbers_snapshots").select("*")
   ]);
   if (m.error) console.error("loadNumbers months:", m.error.message);
   if (o.error) console.error("loadNumbers opex:", o.error.message);
+  if (s.error) console.error("loadNumbers snapshots:", s.error.message);
   monthlyFin = m.data || [];
   opexBudget = o.data || [];
+  numbersSnaps = Object.fromEntries((s.data || []).map(r => [r.key, r]));
   numbersLoaded = true;
   renderNumbers();
 }
@@ -2153,69 +2158,84 @@ function renderNumbers() {
   const today = new Date();
   const num = v => (v === null || v === undefined || v === "") ? null : Number(v);
   const sum = (list, f) => list.reduce((t, x) => t + (num(f(x)) || 0), 0);
+  const avgOf = (list, f) => { const v = list.map(f).map(num).filter(x => x !== null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
 
   // --- live cash health (from the Cash + B2C tabs) ---
+  // Client money held is a memo, not subtracted: the cost of delivering those goods is already in
+  // "we owe" (e.g. Eternity's 15k goes out via the ZOD payments), so subtracting both double counts.
   const cashOnHand = sum(cashAccounts, a => a.balance_usd);
   const openOf = dir => cashItems.filter(c => c.direction === dir && !["paid", "cancelled", "deferred"].includes(c.status));
-  // Client money held is shown as a memo, not subtracted: the cost of delivering those goods is
-  // already in "we owe" (e.g. Eternity's 15k is delivered via the ZOD payments), so subtracting
-  // both would double count. Deferred goods payments (e.g. Chandra's factory deposit) are listed too.
   const held = sum(openOf("held"), c => c.amount_usd);
   const deferredOut = sum(cashItems.filter(c => c.direction === "out" && c.status === "deferred"), c => c.amount_usd);
   const owedToUs = sum(openOf("in"), c => c.amount_usd) + b2cOwedTotal().usd;
   const weOwe = sum(openOf("out"), c => c.amount_usd);
   const afterObligations = cashOnHand + owedToUs - weOwe;
 
-  // --- opex run-rate ---
-  const opexEst = sum(opexBudget, x => x.monthly_usd);
+  // --- opex run-rate (estimate used where a month has no bank actuals) ---
+  const opexEst = sum(opexBudget.filter(x => x.category !== "directors"), x => x.monthly_usd);
   const opexMissing = opexBudget.filter(x => num(x.monthly_usd) === null);
   const opexUnconfirmed = opexBudget.filter(x => !x.confirmed);
-  const runway = opexEst > 0 ? cashOnHand / opexEst : null;
 
-  // --- fiscal year ---
+  // --- months ---
   const fyYear = today.getMonth() + 1 >= FY_START_MONTH ? today.getFullYear() : today.getFullYear() - 1;
   const fyStart = new Date(fyYear, FY_START_MONTH - 1, 1);
   const curMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+  // Months without bank statements use the average of this FY's actual months (falls back to the
+  // recurring-cost budget only if no month has actuals yet).
+  const actualFyRaw = monthlyFin.filter(r => num(r.opex_usd) !== null && parseDate(r.month) >= fyStart);
+  const avgRaw = f => actualFyRaw.length ? actualFyRaw.reduce((t, r) => t + (num(f(r)) || 0), 0) / actualFyRaw.length : null;
+  const opexFallback = avgRaw(r => r.opex_usd) ?? opexEst;
+  const drawsFallback = avgRaw(r => r.director_draws_usd);
   const rows = monthlyFin.map(r => {
     const d = parseDate(r.month);
     const opexActual = num(r.opex_usd);
-    const opex = opexActual !== null ? opexActual : opexEst;
+    const inFyRow = d >= fyStart;
+    const opex = opexActual !== null ? opexActual : (inFyRow ? opexFallback : null);
+    const draws = num(r.director_draws_usd) ?? (opexActual === null && inFyRow ? drawsFallback : null);
     const gpNet = num(r.gross_profit_net_usd) ?? num(r.gross_profit_usd);
     const coreRev = num(r.revenue_usd) !== null ? num(r.revenue_usd) - (num(r.passthrough_revenue_usd) || 0) : null;
+    const trueProfit = gpNet === null || opex === null ? null : gpNet - opex;
     return { ...r, d, partial: d.getTime() === curMonth.getTime(), inFy: d >= fyStart,
-      opexActual, opex, opexIsEst: opexActual === null, gpNet,
+      opexActual, opex, opexIsEst: opexActual === null && opex !== null, draws, gpNet, coreRev,
       gm: coreRev ? num(r.gross_profit_usd) / coreRev : null,
-      trueProfit: gpNet === null ? null : gpNet - opex };
-  });
+      trueProfit, afterDraws: trueProfit === null ? null : trueProfit - (draws || 0) };
+  }).sort((a, b) => b.d - a.d);
   const fyFull = rows.filter(r => r.inFy && r.d < curMonth);
   const n = fyFull.length || 1;
+  const fyActual = fyFull.filter(r => !r.opexIsEst);
   const fyGp = sum(fyFull, r => r.gross_profit_usd), fyGpNet = sum(fyFull, r => r.gpNet);
-  const fyCoreRev = sum(fyFull.filter(r => r.revenue_usd !== null), r => num(r.revenue_usd) - (num(r.passthrough_revenue_usd) || 0));
+  const fyCoreRev = sum(fyFull.filter(r => r.coreRev !== null), r => r.coreRev);
   const fyRev = sum(fyFull, r => r.revenue_usd);
   const fyOpex = sum(fyFull, r => r.opex);
-  const fyActualOpexMonths = fyFull.filter(r => !r.opexIsEst).length;
+  const fyDraws = sum(fyFull, r => r.draws);
   const avgGpNet = fyGpNet / n, avgOpex = fyOpex / n, avgTrue = avgGpNet - avgOpex;
+  const avgDraws = avgOf(fyFull, r => r.draws);
+  const avgAfterDraws = avgTrue - (avgDraws || 0);
   const fyGm = fyCoreRev ? fyGp / fyCoreRev : null;
+  const netMargin = fyCoreRev ? (fyGpNet - fyOpex) / fyCoreRev : null;
   const profitableMonths = fyFull.filter(r => r.trueProfit !== null && r.trueProfit >= 0).length;
+  const burnBase = avgOf(fyFull, r => r.opex) ?? opexEst;
+  const runway = burnBase > 0 ? cashOnHand / (burnBase + (avgDraws || 0)) : null;
   const fyLabel = `FY ${fyYear}/${String((fyYear + 1) % 100).padStart(2, "0")}`;
   const fySince = fyStart.toLocaleDateString(undefined, { month: "short", year: "numeric" });
 
   document.getElementById("numbers-subtitle").textContent =
-    `Numbers — key financial figures · ${fyLabel} from ${fySince} · ${fyFull.length} full month(s) so far`;
+    `Numbers — key financial figures · ${fyLabel} from ${fySince} · ${fyFull.length} full month(s), ${fyActual.length} with bank-statement opex`;
 
   const card = (val, label, cls, sub) => `<div class="card ${cls || ""}" style="cursor:default"><div class="num">${val}</div><div class="label">${label}${sub ? `<br><span class="muted">${sub}</span>` : ""}</div></div>`;
-  const opexEstFlag = fyActualOpexMonths < fyFull.length;
   document.getElementById("numbers-cards").innerHTML = [
     card(fmtK(cashOnHand), "Cash on hand", "", "bank balances logged"),
     card(fmtK(afterObligations), "Cash after obligations", afterObligations < 0 ? "c-garnet" : "c-emerald", "cash + owed to us − we owe"),
     card(fmtK(avgGpNet), "Avg monthly gross profit", "", "after commissions, FY"),
-    card(fmtK(avgOpex), "Avg monthly opex", opexEstFlag ? "c-amber" : "", opexEstFlag ? "estimated" : "actual"),
-    card(fmtK(avgTrue), "Avg true profit / burn", avgTrue < 0 ? "c-garnet" : "c-emerald", "per month, FY"),
+    card(fmtK(avgOpex), "Avg monthly opex", fyActual.length < fyFull.length ? "c-amber" : "", `excl. director draws · ${fyActual.length}/${fyFull.length} mo actual`),
+    card(fmtK(avgTrue), "Avg true profit / burn", avgTrue < 0 ? "c-garnet" : "c-emerald", "GP − opex, per month"),
+    card(avgDraws === null ? "—" : fmtK(avgAfterDraws), "After director draws", avgAfterDraws < 0 ? "c-garnet" : "c-emerald", avgDraws === null ? "draws unknown" : `draws avg ${fmtK(avgDraws)}/mo`),
     card(fmtPct(fyGm), "Gross margin", "", "FY, excl. pass-through"),
-    card(runway === null ? "—" : runway.toFixed(1) + " mo", "Runway", runway !== null && runway < 3 ? "c-garnet" : "", "cash ÷ est. opex")
+    card(runway === null ? "—" : runway.toFixed(1) + " mo", "Runway", runway !== null && runway < 3 ? "c-garnet" : "", "cash ÷ (opex + draws)")
   ].join("");
 
   const monthName = d => d.toLocaleDateString(undefined, { month: "short", year: "numeric" });
+  const cls = v => v === null ? "" : v < 0 ? "short" : "ok";
   const tr = rows.map(r => `
     <tr class="${r.inFy ? "" : "num-prev"}">
       <td class="company">${escapeHtml(monthName(r.d))}${r.partial ? ' <span class="pill">month to date</span>' : ""}${r.notes ? `<div class="order-item">${escapeHtml(r.notes)}</div>` : ""}</td>
@@ -2225,23 +2245,66 @@ function renderNumbers() {
       <td class="num-r"><b>${fmtK(r.gpNet)}</b></td>
       <td class="num-r">${fmtPct(r.gm)}</td>
       <td class="num-r ${r.opexIsEst ? "muted" : ""}">${fmtK(r.opex)}${r.opexIsEst ? " <i>est.</i>" : ""}</td>
-      <td class="num-r"><b class="${r.trueProfit === null ? "" : r.trueProfit < 0 ? "short" : "ok"}">${fmtK(r.trueProfit)}</b></td>
+      <td class="num-r"><b class="${cls(r.trueProfit)}">${fmtK(r.trueProfit)}</b></td>
+      <td class="num-r ${r.opexIsEst ? "muted" : ""}">${r.draws === null ? '<span class="muted">—</span>' : fmtK(r.draws) + (r.opexIsEst ? " <i>est.</i>" : "")}</td>
+      <td class="num-r">${r.draws === null ? '<span class="muted">—</span>' : `<b class="${cls(r.afterDraws)}">${fmtK(r.afterDraws)}</b>`}</td>
     </tr>`).join("");
   const fyOrders = sum(fyFull, r => r.orders_count);
   const fyRows = `
-    <tr class="num-total"><td class="company">${fyLabel} total · ${fyFull.length} full month(s)</td><td class="num-r">${fyOrders}</td><td class="num-r">${fmtK(fyRev)}</td><td class="num-r">${fmtK(fyGp)}</td><td class="num-r">${fmtK(fyGpNet)}</td><td class="num-r">${fmtPct(fyGm)}</td><td class="num-r">${fmtK(fyOpex)}</td><td class="num-r"><b class="${fyGpNet - fyOpex < 0 ? "short" : "ok"}">${fmtK(fyGpNet - fyOpex)}</b></td></tr>
-    <tr class="num-total"><td class="company">${fyLabel} monthly average</td><td class="num-r">${(fyOrders / n).toFixed(1)}</td><td class="num-r">${fmtK(fyRev / n)}</td><td class="num-r">${fmtK(fyGp / n)}</td><td class="num-r">${fmtK(avgGpNet)}</td><td class="num-r"></td><td class="num-r">${fmtK(avgOpex)}</td><td class="num-r"><b class="${avgTrue < 0 ? "short" : "ok"}">${fmtK(avgTrue)}</b></td></tr>`;
+    <tr class="num-total"><td class="company">${fyLabel} total · ${fyFull.length} full month(s)</td><td class="num-r">${fyOrders}</td><td class="num-r">${fmtK(fyRev)}</td><td class="num-r">${fmtK(fyGp)}</td><td class="num-r">${fmtK(fyGpNet)}</td><td class="num-r">${fmtPct(fyGm)}</td><td class="num-r">${fmtK(fyOpex)}</td><td class="num-r"><b class="${cls(fyGpNet - fyOpex)}">${fmtK(fyGpNet - fyOpex)}</b></td><td class="num-r">${fmtK(fyDraws)}</td><td class="num-r"><b class="${cls(fyGpNet - fyOpex - fyDraws)}">${fmtK(fyGpNet - fyOpex - fyDraws)}</b></td></tr>
+    <tr class="num-total"><td class="company">${fyLabel} monthly average</td><td class="num-r">${(fyOrders / n).toFixed(1)}</td><td class="num-r">${fmtK(fyRev / n)}</td><td class="num-r">${fmtK(fyGp / n)}</td><td class="num-r">${fmtK(avgGpNet)}</td><td class="num-r"></td><td class="num-r">${fmtK(avgOpex)}</td><td class="num-r"><b class="${cls(avgTrue)}">${fmtK(avgTrue)}</b></td><td class="num-r">${fmtK(avgDraws)}</td><td class="num-r"><b class="${cls(avgAfterDraws)}">${avgDraws === null ? "—" : fmtK(avgAfterDraws)}</b></td></tr>`;
+
+  // cash flow by month (bank statements, cash basis)
+  const cfRows = rows.filter(r => num(r.receipts_usd) !== null || num(r.cogs_paid_usd) !== null);
+  const cfTable = cfRows.length ? `
+    <h3 class="num-h">Cash flow by month (bank statements)</h3>
+    <div class="table-scroll"><table class="num-table">
+      <thead><tr><th>Month</th><th class="num-r">Received from clients</th><th class="num-r">Paid to factories</th><th class="num-r">Opex</th><th class="num-r">Director draws</th><th class="num-r">Loan repayments</th><th class="num-r">Net cash flow</th><th class="num-r">Unidentified cheques</th></tr></thead>
+      <tbody>${cfRows.map(r => {
+        const net = (num(r.receipts_usd) || 0) - (num(r.cogs_paid_usd) || 0) - (num(r.opex_usd) || 0) - (num(r.director_draws_usd) || 0) - (num(r.loan_repayments_usd) || 0);
+        return `<tr><td class="company">${escapeHtml(monthName(r.d))}</td><td class="num-r">${fmtK(r.receipts_usd)}</td><td class="num-r">${fmtK(r.cogs_paid_usd)}</td><td class="num-r">${fmtK(r.opex_usd)}</td><td class="num-r">${fmtK(r.director_draws_usd)}</td><td class="num-r">${fmtK(r.loan_repayments_usd)}</td><td class="num-r"><b class="${cls(net)}">${fmtK(net)}</b></td><td class="num-r ${num(r.unidentified_cheques_usd) ? "num-warn" : "muted"}">${fmtK(r.unidentified_cheques_usd)}</td></tr>`;
+      }).join("")}</tbody>
+    </table></div>
+    <p class="muted num-note">Cash basis, all company accounts (Airwallex, Wing Lung, China CITIC); transfers between our own accounts and FX conversions excluded. Unidentified cheques (no payee on the statement, not a recurring amount) are NOT in opex — they’re shown separately until their payee is known; some may be factory payments, cash or draws.</p>` : "";
+
+  // client concentration + receivables (snapshot from the lead sheet)
+  const cs = numbersSnaps.clients && numbersSnaps.clients.data;
+  let clientPanel = "", arPanel = "";
+  if (cs) {
+    const conc = cs.concentration || [];
+    const top1 = conc[0], top3 = conc.slice(0, 3).reduce((t, c) => t + c.share, 0);
+    clientPanel = `
+      <div class="num-panel">
+        <h3 class="num-h">Client concentration · gross profit ${escapeHtml(cs.fy_from.slice(0, 7))} → ${escapeHtml(cs.fy_to.slice(0, 7))}</h3>
+        <table class="num-mini">
+          ${conc.map(c => `<tr><td>${escapeHtml(c.client)} <span class="muted">· ${escapeHtml(c.pipeline)} · ${c.deals} deal${c.deals === 1 ? "" : "s"}</span></td><td class="num-r">${fmtK(c.gp)}</td><td class="num-r ${c.share >= 0.25 ? "num-warn" : ""}">${fmtPct(c.share)}</td></tr>`).join("")}
+          <tr><td class="muted">${cs.clients_total - conc.length} other clients</td><td class="num-r muted">${fmtK(cs.others_gp)}</td><td class="num-r muted">${fmtPct(cs.others_gp / cs.fy_gp_all_closed)}</td></tr>
+          <tr class="num-total"><td>Top client · top 3</td><td class="num-r"></td><td class="num-r">${fmtPct(top1 && top1.share)} · ${fmtPct(top3)}</td></tr>
+        </table>
+        <p class="muted num-note">All deals closed in the FY (any stage), so totals run higher than the “Sai Ram + costed” figures in the monthly table. Above 25% from one client = concentration risk. B2B ${fmtK(cs.pipeline_gp.B2B)} · B2C ${fmtK(cs.pipeline_gp["B2C Offline"])}.</p>
+      </div>`;
+    const up = cs.unpaid || [];
+    arPanel = `
+      <div class="num-panel">
+        <h3 class="num-h">Unpaid invoices: ${fmtK(cs.unpaid_total)} · ${up.length}</h3>
+        <table class="num-mini">
+          ${up.map(u => `<tr><td>${escapeHtml(u.client)} <span class="muted">· ${escapeHtml(u.si || "")}</span></td><td class="num-r">${fmtK(u.revenue)}</td><td class="num-r ${u.age_days > 60 ? "num-warn" : "muted"}">${u.age_days ?? "?"}d</td></tr>`).join("")}
+          <tr class="num-total"><td>Order cycle (opened → closed)</td><td class="num-r"></td><td class="num-r">${cs.cycle_days.median}d median</td></tr>
+        </table>
+        <p class="muted num-note">From the lead sheet’s “Unpaid” status, snapshot ${escapeHtml(numbersSnaps.clients.as_of)}. Age = days since the deal was opened. Mean cycle ${cs.cycle_days.mean}d over ${cs.cycle_days.n} deals.</p>
+      </div>`;
+  }
 
   const opexRows = opexBudget.map(x => `<tr><td>${escapeHtml(x.label)}${x.confirmed ? "" : ' <span class="pill pill-cash-planned">to confirm</span>'}${x.basis ? `<div class="order-item">${escapeHtml(x.basis)}</div>` : ""}</td><td class="num-r">${num(x.monthly_usd) === null ? '<span class="muted">?</span>' : fmtK(x.monthly_usd)}</td></tr>`).join("");
 
   document.getElementById("numbers-body").innerHTML = `
     <h3 class="num-h">Monthly profit &amp; burn</h3>
     <div class="table-scroll"><table class="num-table">
-      <thead><tr><th>Month</th><th class="num-r">Orders</th><th class="num-r">Revenue</th><th class="num-r">Gross profit</th><th class="num-r">GP after commissions</th><th class="num-r">GM %</th><th class="num-r">Opex</th><th class="num-r">True profit / burn</th></tr></thead>
+      <thead><tr><th>Month</th><th class="num-r">Orders</th><th class="num-r">Revenue</th><th class="num-r">Gross profit</th><th class="num-r">GP after commissions</th><th class="num-r">GM %</th><th class="num-r">Opex</th><th class="num-r">True profit / burn</th><th class="num-r">Director draws</th><th class="num-r">After draws</th></tr></thead>
       <tbody>${fyRows}${tr}</tbody>
     </table></div>
-    <p class="muted num-note">Revenue &amp; gross profit: snapshot of the B2C Lead Management Sheet (tab “1”; Nov 2025 – Mar 2026 gross profit only, from its Dashboard tab). GM % excludes transit / pass-through revenue. Opex marked <i>est.</i> uses the estimated run-rate below until that month’s actual opex is entered. True profit / burn = GP after commissions − opex. FY averages use full months only.</p>
-
+    <p class="muted num-note">Revenue &amp; gross profit: snapshot of the B2C Lead Management Sheet (tab “1”: deals at Sai Ram with cost &amp; revenue, by closed date). GM % excludes transit / pass-through revenue. Opex = bank-statement actuals excluding director draws (recurring cheques counted as probable rent &amp; salaries); <i>est.</i> = average of this FY’s actual months, used where statements aren’t in yet. True profit / burn = GP after commissions − opex.</p>
+    ${cfTable}
     <div class="num-grid">
       <div class="num-panel">
         <h3 class="num-h">Cash health (live)</h3>
@@ -2249,36 +2312,40 @@ function renderNumbers() {
           <tr><td>Cash on hand</td><td class="num-r">${fmtK(cashOnHand)}</td></tr>
           <tr><td>+ Owed to us (expected in + B2C unpaid)</td><td class="num-r">${fmtK(owedToUs)}</td></tr>
           <tr><td>− We owe (unpaid out)</td><td class="num-r">${fmtK(weOwe)}</td></tr>
-          <tr class="num-total"><td>= Cash after obligations</td><td class="num-r"><b class="${afterObligations < 0 ? "short" : "ok"}">${fmtK(afterObligations)}</b></td></tr>
+          <tr class="num-total"><td>= Cash after obligations</td><td class="num-r"><b class="${cls(afterObligations)}">${fmtK(afterObligations)}</b></td></tr>
           <tr class="num-memo"><td>Memo: client money held (goods still owed — their factory cost is in “we owe” or deferred)</td><td class="num-r">${fmtK(held)}</td></tr>
           <tr class="num-memo"><td>Memo: deferred payments (not counted above)</td><td class="num-r">${fmtK(deferredOut)}</td></tr>
         </table>
       </div>
       <div class="num-panel">
-        <h3 class="num-h">Key ratios</h3>
+        <h3 class="num-h">Key ratios (${fyLabel})</h3>
         <table class="num-mini">
-          <tr><td>Gross margin (FY, excl. pass-through)</td><td class="num-r">${fmtPct(fyGm)}</td></tr>
+          <tr><td>Gross margin (excl. pass-through)</td><td class="num-r">${fmtPct(fyGm)}</td></tr>
+          <tr><td>Net margin (true profit ÷ revenue)</td><td class="num-r">${fmtPct(netMargin)}</td></tr>
           <tr><td>Commissions as % of gross profit</td><td class="num-r">${fmtPct(fyGp ? (fyGp - fyGpNet) / fyGp : null)}</td></tr>
           <tr><td>Opex as % of gross profit</td><td class="num-r">${fmtPct(fyGpNet ? fyOpex / fyGpNet : null)}</td></tr>
-          <tr><td>Break-even: GP needed per month</td><td class="num-r">${fmtK(opexEst)}</td></tr>
-          <tr><td>Months above break-even (FY)</td><td class="num-r">${profitableMonths} / ${fyFull.length}</td></tr>
-          <tr><td>Runway (cash on hand ÷ est. opex)</td><td class="num-r">${runway === null ? "—" : runway.toFixed(1) + " months"}</td></tr>
+          <tr><td>Director draws as % of gross profit</td><td class="num-r">${fmtPct(fyGpNet && fyDraws ? fyDraws / fyGpNet : null)}</td></tr>
+          <tr><td>Break-even: GP needed / month (opex + draws)</td><td class="num-r">${fmtK(burnBase + (avgDraws || 0))}</td></tr>
+          <tr><td>Months above break-even (GP − opex)</td><td class="num-r">${profitableMonths} / ${fyFull.length}</td></tr>
+          <tr><td>Runway (cash on hand ÷ monthly opex + draws)</td><td class="num-r">${runway === null ? "—" : runway.toFixed(1) + " months"}</td></tr>
         </table>
       </div>
+      ${clientPanel}
+      ${arPanel}
       <div class="num-panel">
-        <h3 class="num-h">Estimated monthly opex: ${fmtK(opexEst)}${opexMissing.length ? ` + ${opexMissing.length} unknown` : ""}</h3>
+        <h3 class="num-h">Known recurring costs: ${fmtK(opexEst)}/mo${opexMissing.length ? ` + ${opexMissing.length} unknown` : ""} · actual avg ${fmtK(opexFallback)}</h3>
         <table class="num-mini">${opexRows}</table>
-        <p class="muted num-note">${opexUnconfirmed.length} item(s) to confirm. Factory / goods payments are cost of goods, not opex.</p>
+        <p class="muted num-note">The gap to the actual average is mostly rent and salaries paid by cheque, plus card spend and one-offs. ${opexUnconfirmed.length} item(s) to confirm. Factory / goods payments are cost of goods, not opex.</p>
       </div>
       <div class="num-panel">
         <h3 class="num-h">Hormozi growth numbers</h3>
         <table class="num-mini">
           <tr><td>CAC (cost to win one client)</td><td class="num-r muted">not tracked yet</td></tr>
-          <tr><td>LTGP (lifetime gross profit per client)</td><td class="num-r muted">not tracked yet</td></tr>
+          <tr><td>LTGP (lifetime gross profit per client)</td><td class="num-r muted">see concentration</td></tr>
           <tr><td>LTGP : CAC (≥ 3:1; aim 6:1+)</td><td class="num-r muted">not tracked yet</td></tr>
           <tr><td>30-day cash vs CAC (≥ 1×)</td><td class="num-r muted">not tracked yet</td></tr>
         </table>
-        <p class="muted num-note">Needs acquisition spend tagged (Apollo, fairs, commissions, free samples) and gross profit per client — next phase.</p>
+        <p class="muted num-note">Needs acquisition spend tagged (Apollo, fairs, commissions, free samples) — next phase.</p>
       </div>
     </div>`;
 }
