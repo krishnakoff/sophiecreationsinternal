@@ -359,3 +359,23 @@ th.cash-amount{ font-family:var(--font-body); }
 .outreach-table td{padding:3px 8px;border-bottom:1px solid var(--line, #eee)}
 .outreach-table .mono{font-family:"IBM Plex Mono",monospace;white-space:nowrap}
 .outreach-table .nowrap{white-space:nowrap}
+
+/* ---------- numbers tab ---------- */
+.num-cards{ grid-template-columns:repeat(7,1fr); }
+.num-h{ font-size:14px; margin:6px 0 10px; }
+.num-r{ text-align:right; font-family:var(--font-mono); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.num-table .num-total td{ background:var(--panel); font-weight:600; border-top:1px solid var(--hairline); }
+.num-table tr.num-prev td{ opacity:.6; }
+.num-table .short, .num-mini .short{ color:var(--garnet); }
+.num-table .ok, .num-mini .ok{ color:var(--emerald); }
+.num-note{ font-size:12px; margin:8px 0 22px; }
+.num-grid{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; margin-bottom:30px; }
+.num-panel{ background:var(--panel); border:1px solid var(--hairline); border-radius:10px; padding:12px 16px; }
+.num-mini{ width:100%; min-width:0; border-collapse:collapse; }
+.num-mini td{ padding:5px 4px; border-bottom:1px solid var(--hairline); font-size:13px; vertical-align:top; }
+.num-mini td.num-r{ width:1%; padding-left:12px; }
+.num-cards .card .num{ white-space:nowrap; font-size:19px; }
+.num-memo td{ color:var(--muted); font-size:12px; }
+.num-mini tr.num-total td{ font-weight:600; border-bottom:none; }
+@media (max-width:820px){ .num-cards{ grid-template-columns:repeat(3,1fr); } .num-grid{ grid-template-columns:1fr; } }
+@media (max-width:480px){ .num-cards{ grid-template-columns:repeat(2,1fr); } }
