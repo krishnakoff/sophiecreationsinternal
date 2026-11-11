@@ -129,7 +129,7 @@ if (lastTab && document.getElementById("view-" + lastTab)) switchTab(lastTab);
 
 // ---------- data + realtime ----------
 async function loadAll() {
-  await Promise.all([loadLeads(), loadOutline(), loadOutboundStats(), loadMusts(), loadTeam(), loadOrders(), loadB2c(), loadCash(), loadOutreach()]);
+  await Promise.all([loadLeads(), loadOutline(), loadOutboundStats(), loadMusts(), loadTeam(), loadOrders(), loadB2c(), loadCash(), loadOutreach(), loadNumbers()]);
   subscribeRealtime();
 }
 
@@ -168,6 +168,10 @@ function subscribeRealtime() {
   sb.channel("public:cash")
     .on("postgres_changes", { event: "*", schema: "public", table: "cash_items" }, loadCash)
     .on("postgres_changes", { event: "*", schema: "public", table: "cash_accounts" }, loadCash)
+    .subscribe();
+  sb.channel("public:numbers")
+    .on("postgres_changes", { event: "*", schema: "public", table: "monthly_financials" }, loadNumbers)
+    .on("postgres_changes", { event: "*", schema: "public", table: "opex_budget" }, loadNumbers)
     .subscribe();
 }
 
@@ -648,7 +652,7 @@ let b2cDoneOpen = false;
 
 async function loadB2c() {
   const { data, error } = await sb.from("b2c_orders").select("*").order("next_action_on", { nullsFirst: false });
-  if (!error) { b2cOrders = data || []; renderB2c(); if (cashLoaded) renderCash(); }
+  if (!error) { b2cOrders = data || []; renderB2c(); if (cashLoaded) { renderCash(); renderNumbers(); } }
   else console.error("loadB2c:", error.message);
 }
 
@@ -815,6 +819,7 @@ async function loadCash() {
   cashAccounts = accounts.data || [];
   cashLoaded = true;
   renderCash();
+  renderNumbers();
 }
 
 function fmtUSD(n) {
@@ -2111,6 +2116,171 @@ function initOutlineEditing() {
   // Flush any pending debounced save the instant focus leaves the editable region entirely
   // (e.g. switching tabs), so a quick edit-then-navigate-away never gets silently dropped.
   wrap.addEventListener("focusout", flushPendingSaves);
+}
+
+// ---------- numbers (key financial figures) ----------
+// Monthly revenue / gross profit are a snapshot copied from the B2C Lead Management Sheet (tab "1"),
+// which stays the ledger. Opex: a month's ACTUAL figure when known (monthly_financials.opex_usd),
+// otherwise the ESTIMATED run-rate = sum of opex_budget (known recurring costs). Fiscal year starts
+// in FY_START_MONTH (1-based). True profit / burn = gross profit after commissions − opex.
+const FY_START_MONTH = 4; // April
+let monthlyFin = [];
+let opexBudget = [];
+let numbersLoaded = false;
+
+async function loadNumbers() {
+  const [m, o] = await Promise.all([
+    sb.from("monthly_financials").select("*").order("month", { ascending: false }),
+    sb.from("opex_budget").select("*").eq("active", true).order("position")
+  ]);
+  if (m.error) console.error("loadNumbers months:", m.error.message);
+  if (o.error) console.error("loadNumbers opex:", o.error.message);
+  monthlyFin = m.data || [];
+  opexBudget = o.data || [];
+  numbersLoaded = true;
+  renderNumbers();
+}
+
+function fmtPct(n) { return n === null || n === undefined || !isFinite(n) ? "—" : (n * 100).toFixed(1) + "%"; }
+function fmtK(n) {
+  if (n === null || n === undefined || n === "") return "—";
+  const v = Number(n);
+  return (v < 0 ? "−$" : "$") + Math.abs(v).toLocaleString("en-US", { maximumFractionDigits: 0 });
+}
+
+function renderNumbers() {
+  if (!numbersLoaded || !cashLoaded) return;
+  const today = new Date();
+  const num = v => (v === null || v === undefined || v === "") ? null : Number(v);
+  const sum = (list, f) => list.reduce((t, x) => t + (num(f(x)) || 0), 0);
+
+  // --- live cash health (from the Cash + B2C tabs) ---
+  const cashOnHand = sum(cashAccounts, a => a.balance_usd);
+  const openOf = dir => cashItems.filter(c => c.direction === dir && !["paid", "cancelled", "deferred"].includes(c.status));
+  // Client money held is shown as a memo, not subtracted: the cost of delivering those goods is
+  // already in "we owe" (e.g. Eternity's 15k is delivered via the ZOD payments), so subtracting
+  // both would double count. Deferred goods payments (e.g. Chandra's factory deposit) are listed too.
+  const held = sum(openOf("held"), c => c.amount_usd);
+  const deferredOut = sum(cashItems.filter(c => c.direction === "out" && c.status === "deferred"), c => c.amount_usd);
+  const owedToUs = sum(openOf("in"), c => c.amount_usd) + b2cOwedTotal().usd;
+  const weOwe = sum(openOf("out"), c => c.amount_usd);
+  const afterObligations = cashOnHand + owedToUs - weOwe;
+
+  // --- opex run-rate ---
+  const opexEst = sum(opexBudget, x => x.monthly_usd);
+  const opexMissing = opexBudget.filter(x => num(x.monthly_usd) === null);
+  const opexUnconfirmed = opexBudget.filter(x => !x.confirmed);
+  const runway = opexEst > 0 ? cashOnHand / opexEst : null;
+
+  // --- fiscal year ---
+  const fyYear = today.getMonth() + 1 >= FY_START_MONTH ? today.getFullYear() : today.getFullYear() - 1;
+  const fyStart = new Date(fyYear, FY_START_MONTH - 1, 1);
+  const curMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+  const rows = monthlyFin.map(r => {
+    const d = parseDate(r.month);
+    const opexActual = num(r.opex_usd);
+    const opex = opexActual !== null ? opexActual : opexEst;
+    const gpNet = num(r.gross_profit_net_usd) ?? num(r.gross_profit_usd);
+    const coreRev = num(r.revenue_usd) !== null ? num(r.revenue_usd) - (num(r.passthrough_revenue_usd) || 0) : null;
+    return { ...r, d, partial: d.getTime() === curMonth.getTime(), inFy: d >= fyStart,
+      opexActual, opex, opexIsEst: opexActual === null, gpNet,
+      gm: coreRev ? num(r.gross_profit_usd) / coreRev : null,
+      trueProfit: gpNet === null ? null : gpNet - opex };
+  });
+  const fyFull = rows.filter(r => r.inFy && r.d < curMonth);
+  const n = fyFull.length || 1;
+  const fyGp = sum(fyFull, r => r.gross_profit_usd), fyGpNet = sum(fyFull, r => r.gpNet);
+  const fyCoreRev = sum(fyFull.filter(r => r.revenue_usd !== null), r => num(r.revenue_usd) - (num(r.passthrough_revenue_usd) || 0));
+  const fyRev = sum(fyFull, r => r.revenue_usd);
+  const fyOpex = sum(fyFull, r => r.opex);
+  const fyActualOpexMonths = fyFull.filter(r => !r.opexIsEst).length;
+  const avgGpNet = fyGpNet / n, avgOpex = fyOpex / n, avgTrue = avgGpNet - avgOpex;
+  const fyGm = fyCoreRev ? fyGp / fyCoreRev : null;
+  const profitableMonths = fyFull.filter(r => r.trueProfit !== null && r.trueProfit >= 0).length;
+  const fyLabel = `FY ${fyYear}/${String((fyYear + 1) % 100).padStart(2, "0")}`;
+  const fySince = fyStart.toLocaleDateString(undefined, { month: "short", year: "numeric" });
+
+  document.getElementById("numbers-subtitle").textContent =
+    `Numbers — key financial figures · ${fyLabel} from ${fySince} · ${fyFull.length} full month(s) so far`;
+
+  const card = (val, label, cls, sub) => `<div class="card ${cls || ""}" style="cursor:default"><div class="num">${val}</div><div class="label">${label}${sub ? `<br><span class="muted">${sub}</span>` : ""}</div></div>`;
+  const opexEstFlag = fyActualOpexMonths < fyFull.length;
+  document.getElementById("numbers-cards").innerHTML = [
+    card(fmtK(cashOnHand), "Cash on hand", "", "bank balances logged"),
+    card(fmtK(afterObligations), "Cash after obligations", afterObligations < 0 ? "c-garnet" : "c-emerald", "cash + owed to us − we owe"),
+    card(fmtK(avgGpNet), "Avg monthly gross profit", "", "after commissions, FY"),
+    card(fmtK(avgOpex), "Avg monthly opex", opexEstFlag ? "c-amber" : "", opexEstFlag ? "estimated" : "actual"),
+    card(fmtK(avgTrue), "Avg true profit / burn", avgTrue < 0 ? "c-garnet" : "c-emerald", "per month, FY"),
+    card(fmtPct(fyGm), "Gross margin", "", "FY, excl. pass-through"),
+    card(runway === null ? "—" : runway.toFixed(1) + " mo", "Runway", runway !== null && runway < 3 ? "c-garnet" : "", "cash ÷ est. opex")
+  ].join("");
+
+  const monthName = d => d.toLocaleDateString(undefined, { month: "short", year: "numeric" });
+  const tr = rows.map(r => `
+    <tr class="${r.inFy ? "" : "num-prev"}">
+      <td class="company">${escapeHtml(monthName(r.d))}${r.partial ? ' <span class="pill">month to date</span>' : ""}${r.notes ? `<div class="order-item">${escapeHtml(r.notes)}</div>` : ""}</td>
+      <td class="num-r">${r.orders_count ?? "—"}</td>
+      <td class="num-r">${fmtK(r.revenue_usd)}</td>
+      <td class="num-r">${fmtK(r.gross_profit_usd)}</td>
+      <td class="num-r"><b>${fmtK(r.gpNet)}</b></td>
+      <td class="num-r">${fmtPct(r.gm)}</td>
+      <td class="num-r ${r.opexIsEst ? "muted" : ""}">${fmtK(r.opex)}${r.opexIsEst ? " <i>est.</i>" : ""}</td>
+      <td class="num-r"><b class="${r.trueProfit === null ? "" : r.trueProfit < 0 ? "short" : "ok"}">${fmtK(r.trueProfit)}</b></td>
+    </tr>`).join("");
+  const fyOrders = sum(fyFull, r => r.orders_count);
+  const fyRows = `
+    <tr class="num-total"><td class="company">${fyLabel} total · ${fyFull.length} full month(s)</td><td class="num-r">${fyOrders}</td><td class="num-r">${fmtK(fyRev)}</td><td class="num-r">${fmtK(fyGp)}</td><td class="num-r">${fmtK(fyGpNet)}</td><td class="num-r">${fmtPct(fyGm)}</td><td class="num-r">${fmtK(fyOpex)}</td><td class="num-r"><b class="${fyGpNet - fyOpex < 0 ? "short" : "ok"}">${fmtK(fyGpNet - fyOpex)}</b></td></tr>
+    <tr class="num-total"><td class="company">${fyLabel} monthly average</td><td class="num-r">${(fyOrders / n).toFixed(1)}</td><td class="num-r">${fmtK(fyRev / n)}</td><td class="num-r">${fmtK(fyGp / n)}</td><td class="num-r">${fmtK(avgGpNet)}</td><td class="num-r"></td><td class="num-r">${fmtK(avgOpex)}</td><td class="num-r"><b class="${avgTrue < 0 ? "short" : "ok"}">${fmtK(avgTrue)}</b></td></tr>`;
+
+  const opexRows = opexBudget.map(x => `<tr><td>${escapeHtml(x.label)}${x.confirmed ? "" : ' <span class="pill pill-cash-planned">to confirm</span>'}${x.basis ? `<div class="order-item">${escapeHtml(x.basis)}</div>` : ""}</td><td class="num-r">${num(x.monthly_usd) === null ? '<span class="muted">?</span>' : fmtK(x.monthly_usd)}</td></tr>`).join("");
+
+  document.getElementById("numbers-body").innerHTML = `
+    <h3 class="num-h">Monthly profit &amp; burn</h3>
+    <div class="table-scroll"><table class="num-table">
+      <thead><tr><th>Month</th><th class="num-r">Orders</th><th class="num-r">Revenue</th><th class="num-r">Gross profit</th><th class="num-r">GP after commissions</th><th class="num-r">GM %</th><th class="num-r">Opex</th><th class="num-r">True profit / burn</th></tr></thead>
+      <tbody>${fyRows}${tr}</tbody>
+    </table></div>
+    <p class="muted num-note">Revenue &amp; gross profit: snapshot of the B2C Lead Management Sheet (tab “1”; Nov 2025 – Mar 2026 gross profit only, from its Dashboard tab). GM % excludes transit / pass-through revenue. Opex marked <i>est.</i> uses the estimated run-rate below until that month’s actual opex is entered. True profit / burn = GP after commissions − opex. FY averages use full months only.</p>
+
+    <div class="num-grid">
+      <div class="num-panel">
+        <h3 class="num-h">Cash health (live)</h3>
+        <table class="num-mini">
+          <tr><td>Cash on hand</td><td class="num-r">${fmtK(cashOnHand)}</td></tr>
+          <tr><td>+ Owed to us (expected in + B2C unpaid)</td><td class="num-r">${fmtK(owedToUs)}</td></tr>
+          <tr><td>− We owe (unpaid out)</td><td class="num-r">${fmtK(weOwe)}</td></tr>
+          <tr class="num-total"><td>= Cash after obligations</td><td class="num-r"><b class="${afterObligations < 0 ? "short" : "ok"}">${fmtK(afterObligations)}</b></td></tr>
+          <tr class="num-memo"><td>Memo: client money held (goods still owed — their factory cost is in “we owe” or deferred)</td><td class="num-r">${fmtK(held)}</td></tr>
+          <tr class="num-memo"><td>Memo: deferred payments (not counted above)</td><td class="num-r">${fmtK(deferredOut)}</td></tr>
+        </table>
+      </div>
+      <div class="num-panel">
+        <h3 class="num-h">Key ratios</h3>
+        <table class="num-mini">
+          <tr><td>Gross margin (FY, excl. pass-through)</td><td class="num-r">${fmtPct(fyGm)}</td></tr>
+          <tr><td>Commissions as % of gross profit</td><td class="num-r">${fmtPct(fyGp ? (fyGp - fyGpNet) / fyGp : null)}</td></tr>
+          <tr><td>Opex as % of gross profit</td><td class="num-r">${fmtPct(fyGpNet ? fyOpex / fyGpNet : null)}</td></tr>
+          <tr><td>Break-even: GP needed per month</td><td class="num-r">${fmtK(opexEst)}</td></tr>
+          <tr><td>Months above break-even (FY)</td><td class="num-r">${profitableMonths} / ${fyFull.length}</td></tr>
+          <tr><td>Runway (cash on hand ÷ est. opex)</td><td class="num-r">${runway === null ? "—" : runway.toFixed(1) + " months"}</td></tr>
+        </table>
+      </div>
+      <div class="num-panel">
+        <h3 class="num-h">Estimated monthly opex: ${fmtK(opexEst)}${opexMissing.length ? ` + ${opexMissing.length} unknown` : ""}</h3>
+        <table class="num-mini">${opexRows}</table>
+        <p class="muted num-note">${opexUnconfirmed.length} item(s) to confirm. Factory / goods payments are cost of goods, not opex.</p>
+      </div>
+      <div class="num-panel">
+        <h3 class="num-h">Hormozi growth numbers</h3>
+        <table class="num-mini">
+          <tr><td>CAC (cost to win one client)</td><td class="num-r muted">not tracked yet</td></tr>
+          <tr><td>LTGP (lifetime gross profit per client)</td><td class="num-r muted">not tracked yet</td></tr>
+          <tr><td>LTGP : CAC (≥ 3:1; aim 6:1+)</td><td class="num-r muted">not tracked yet</td></tr>
+          <tr><td>30-day cash vs CAC (≥ 1×)</td><td class="num-r muted">not tracked yet</td></tr>
+        </table>
+        <p class="muted num-note">Needs acquisition spend tagged (Apollo, fairs, commissions, free samples) and gross profit per client — next phase.</p>
+      </div>
+    </div>`;
 }
 
 initOutlineEditing();

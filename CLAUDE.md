@@ -647,6 +647,30 @@ first), expected money in, and the position (cash on hand + expected in − unpa
 ShipAny reminders. When an email shows a payment landed (Airwallex/DBS notices) or went out, PATCH
 the matching row to `paid`.
 
+## Numbers tab (key financial figures)
+
+Krishna-only view of the company's health (Hormozi-style), rendered on the **Numbers** tab.
+Fiscal year starts in `FY_START_MONTH` in `app.js` (April; the B2C sheet's Dashboard tab says
+1 May — confirm with Krishna before changing).
+
+- `public.monthly_financials`: one row per calendar month (`month` = 1st of month, unique).
+  `revenue_usd`, `gross_profit_usd` (before commissions = sheet "Gross Profit N"),
+  `gross_profit_net_usd` (after commissions = "Gross Profit Z") and `orders_count` are a **snapshot
+  copied from the B2C Lead Management Sheet, tab "1"** (read-only to us — never edit the sheet).
+  `passthrough_revenue_usd` = transit revenue included in revenue but excluded from GM %.
+  Refresh them (upsert on `month`) when Krishna asks or at month end.
+  `opex_usd` = the month's ACTUAL operating expenditure once known (accountant / JS / DBS +
+  Airwallex statements), with the split in `opex_breakdown` jsonb; null until then.
+- `public.opex_budget`: known recurring monthly costs (rent share, staff, Fitaye base, software,
+  utilities, bank fees, director draws). Their sum = the **estimated** monthly opex run-rate used
+  for runway, break-even and true profit wherever a month has no actual opex. `confirmed = false`
+  rows show "to confirm". Factory / goods payments are cost of goods, never opex.
+- The tab computes: cash on hand, cash after obligations (cash + owed to us − we owe; client money
+  held shown as a memo so it isn't double-counted), monthly + FY gross profit, GM %, opex, true
+  profit / burn (GP after commissions − opex), commissions % of GP, opex % of GP, break-even,
+  months above break-even, runway. CAC / LTGP / 30-day cash are placeholders until acquisition
+  spend and per-client gross profit are tracked.
+
 ## Team / org chart
 
 Table `public.team_members` holds the company org chart, rendered read-only on the web app's
