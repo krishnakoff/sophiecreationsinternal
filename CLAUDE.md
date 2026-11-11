@@ -682,6 +682,15 @@ Fiscal year starts in `FY_START_MONTH` in `app.js` (April; the B2C sheet's Dashb
   Krishna's commission) is legally Fitaye's consultation services → all of it is opex; so true
   profit / burn = gross profit (BEFORE commissions, sheet "Gross Profit N") − opex. Months without
   statements use the average of this FY's actual months (marked *est.*).
+- **Layout (v5, 11 Nov):** modelled on Krishna's training log. Top cards = FY revenue, FY gross
+  profit, FY net profit, cash on hand (runway); then revenue last month and opex (latest month with
+  statements). Left: recurring monthly expenses (6-month average per `cost_breakdown` line, tagged
+  fixed/variable by `nxTag()` in `app.js`; recurring = paid in 3+ of the last 6 statement months or
+  both of the latest 2), cash health, and a clickable month list. Right: rolling 6 full months of net
+  profit, gross profit and opex, plus unpaid invoices and client concentration. **Gross profit**
+  shown = Krishna's definition, revenue − (COGS + Fitaye commission + shipping) = `gross_profit_net_usd`.
+  **Net profit** = `gross_profit_usd` (before commission) − opex, because opex already contains every
+  Fitaye payment, so it isn't counted twice.
 - `public.numbers_snapshots` (key `clients`): client concentration, order cycle and unpaid
   invoices computed from the lead sheet's Lead Tracker (read-only export). Refresh when asked.
 - The tab computes: cash on hand, cash after obligations (cash + owed to us − we owe; client money
