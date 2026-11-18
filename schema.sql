@@ -114,10 +114,10 @@ create table if not exists public.daily_musts (
 -- ---------- candidates (hiring log — everyone interviewed, for any role) ----------
 -- Not shown anywhere in the web app; written and queried from chat (see CLAUDE.md). One row per
 -- interview: the same person interviewing for a second role gets a second row, matched up by
--- email. role is free text (e.g. 'social_media_va', 'video_editor') so a new role needs no schema
+-- email. role is free text (e.g. 'social_media_manager', 'erp_admin', 'video_editor') so a new role needs no schema
 -- change. scores is a jsonb scorecard whose keys vary by role (VA: comms/gut/social/design,
 -- editors: whatever criteria get used) — numeric, decimals allowed. also_fit_for tags other
--- roles someone could fill (e.g. 'video_editor', 'ecom', 'karen_backup') so a future search for
+-- roles someone could fill (e.g. 'video_editor', 'ecom', 'erp_admin') so a future search for
 -- that role finds them even though they interviewed for something else. verdict keeps the exact
 -- wording; status is the normalized, filterable version of it.
 create table if not exists public.candidates (
