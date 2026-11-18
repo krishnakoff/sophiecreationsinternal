@@ -352,7 +352,11 @@ Table `public.candidates` is a memory of everyone interviewed for any role (VA, 
 who to call back. **It isn't rendered anywhere in the web app** and isn't realtime-enabled; it's
 written and queried purely from chat. Both accounts can read it (same RLS as every other table).
 
-- **One row per interview.** `role` is free text, snake_case — `social_media_va`,
+- **Role history:** the Oct 2026 round (21 rows, all 8–14 Oct) was for the Social Media Manager
+  opening (Recelyn hired) — formerly `social_media_va`, renamed `social_media_manager`. Karen's
+  ERP Admin round (Aug 2026) predates this table and isn't logged; `erp_admin` candidates so far
+  are SMM applicants tagged in `also_fit_for` (Maria Veronica, Jeroen Alejo, Jonerissa Planillo).
+- **One row per interview.** `role` is free text, snake_case — `social_media_manager`, `erp_admin`,
   `video_editor`, etc. Reuse an existing role name if one fits (`select distinct role`); a new
   role needs no schema change. If someone already on file interviews for a different role, add a
   new row for that role (find them by email first) rather than overwriting the old one.
@@ -376,7 +380,7 @@ written and queried purely from chat. Both accounts can read it (same RLS as eve
   words ("Fluent, able to be a manager"), map it to a number and keep the words in `notes`.
   Leave a key out entirely rather than storing a blank.
 - **`also_fit_for`** tags other roles/uses someone could fill beyond what they interviewed for
-  (`video_editor`, `ecom`, `karen_backup`, `bookkeeping`, `graphic_design`, `web`, ...). When
+  (`video_editor`, `ecom`, `erp_admin`, `bookkeeping`, `graphic_design`, `web`, ...). When
   asked "who do I have for role X", search both `role = X` and `also_fit_for` containing X.
 - `hourly_rate_usd`, `age` (text — "23/24" happens), `availability`, `red_flags`, `notes`,
   `interviewed_on` (date, if known) are plain fields.
@@ -710,6 +714,9 @@ write rows with Krishna's `owner_id` by default (it's just a technical field her
   top of the org, currently just Sanjay). **`position`** orders siblings left to right.
   Current structure: Sanjay (CEO) → Krishna (Director) and Chloe; Krishna → Priscilla, Karen,
   Recelyn.
+- Titles: Karen = **ERP Admin** (role `erp_admin`: JewelSteps orders/invoices/statements data
+  entry), Recelyn = **Social Media Manager** (role `social_media_manager`). Keep `title` and
+  the candidates `role` name aligned when hiring for either.
 - `title` is the job title shown on the card; `focus` is a one-line "what they actually handle"
   under it; `emails` is an array (the first one is shown).
 - **Someone leaves** → set `status: "former"` rather than deleting, so they stay on record.
