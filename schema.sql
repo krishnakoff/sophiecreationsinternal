@@ -138,9 +138,13 @@ create table if not exists public.candidates (
   scores jsonb not null default '{}',
   also_fit_for text[] not null default '{}',
   interviewed_on date,
+  whatsapp text,
+  interview_1 text,  -- link to first interview: Drive Meet folder (notes + recording) or the recording
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table public.candidates add column if not exists interview_1 text;
+alter table public.candidates add column if not exists whatsapp text;
 
 -- ---------- team_members (company org chart, rendered on the Team tab) ----------
 -- Company-wide, not per-owner: the Team tab shows every active row no matter whose name is

@@ -352,10 +352,19 @@ Table `public.candidates` is a memory of everyone interviewed for any role (VA, 
 who to call back. **It isn't rendered anywhere in the web app** and isn't realtime-enabled; it's
 written and queried purely from chat. Both accounts can read it (same RLS as every other table).
 
-- **Role history:** the Oct 2026 round (21 rows, all 8–14 Oct) was for the Social Media Manager
-  opening (Recelyn hired) — formerly `social_media_va`, renamed `social_media_manager`. Karen's
-  ERP Admin round (Aug 2026) predates this table and isn't logged; `erp_admin` candidates so far
-  are SMM applicants tagged in `also_fit_for` (Maria Veronica, Jeroen Alejo, Jonerissa Planillo).
+- **Role history:** the Oct 2026 round (all 8–14 Oct) was for the Social Media Manager opening
+  (Recelyn hired) — formerly `social_media_va`, renamed `social_media_manager`. Maria Veronica and
+  Jeroen Alejo came from that round but were moved to `erp_admin` on Krishna's call; Jonerissa
+  Planillo stays SMM, tagged `erp_admin`. Karen's ERP Admin round was June 2026 (OnlineJobs.ph
+  post "Zoho"; Karen hired, Realyn Jardeleza on file); notes there are from Gemini summaries, not
+  Krishna. Not tracked for now: Zoho automation specialists, outbound/lead-gen, general May VAs.
+- **Drive sheet is the source of truth.** Google Sheet "Candidates Tracker" (02. HR & Legal
+  Contracts, tabs Social Media Manager / ERP Admin / Video Editor). Krishna edits it directly, so
+  when it and this table disagree, sync the table from the sheet. Any write to the sheet needs
+  Krishna's explicit double confirmation.
+- **`interview_1`** = link to the first interview in Krishna's Meet Recordings folder (the
+  per-meeting folder with Gemini notes + recording, else the recording). **`whatsapp`** = number
+  as written in the sheet.
 - **One row per interview.** `role` is free text, snake_case — `social_media_manager`, `erp_admin`,
   `video_editor`, etc. Reuse an existing role name if one fits (`select distinct role`); a new
   role needs no schema change. If someone already on file interviews for a different role, add a
