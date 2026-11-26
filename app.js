@@ -222,6 +222,51 @@ const STAGES = [
   { id: "dead", label: "Dead" }
 ];
 let crmStageFilter = null;
+const expandedLeads = new Set(); // lead ids whose client profile panel is open
+
+// Client profile panel (product categories, samples on memo, contacts, shipping profiles).
+// Data is written from chat (see CLAUDE.md "Client profiles"); the app only displays it.
+function hasProfile(l) {
+  return (l.product_categories || []).length || (l.samples_on_memo || "").trim() ||
+    (l.contacts || []).length || (l.shipping_addresses || []).length || (l.billing_address || "").trim();
+}
+
+function profilePanel(l) {
+  const v = s => escapeHtml(s || "");
+  const cats = (l.product_categories || []);
+  const contacts = (l.contacts || []);
+  const ships = (l.shipping_addresses || []);
+  const field = (label, val) => val ? `<div class="pf-field"><span class="pf-k">${label}</span><span class="pf-v">${val}</span></div>` : "";
+  const mail = e => e ? `<a href="mailto:${v(e)}">${v(e)}</a>` : "";
+  const contactCards = contacts.map((c, i) => `
+    <div class="pf-card">
+      <div class="pf-card-title">Contact ${i + 1}${c.role ? ` <span class="muted">· ${v(c.role)}</span>` : ""}</div>
+      ${field("Name", v(c.name))}${field("Email", mail(c.email))}${field("Phone", v(c.phone))}
+    </div>`).join("");
+  const shipCards = ships.map((s, i) => {
+    const addr = [s.address_line1, s.address_line2, [s.city, s.state, s.postal_code].filter(Boolean).join(" "), s.country]
+      .filter(x => x && String(x).trim()).map(v).join("<br>");
+    return `
+    <div class="pf-card">
+      <div class="pf-card-title">Shipping address ${i + 1}${s.label ? ` <span class="muted">· ${v(s.label)}</span>` : ""}</div>
+      ${field("Company", v(s.company_name))}${field("Contact", v(s.contact_name))}${field("Phone", v(s.contact_number))}
+      ${field("Email", mail(s.email))}${field("Address", addr)}${field("Notes", v(s.notes))}
+    </div>`;
+  }).join("");
+  return `
+    <div class="profile-panel">
+      ${l.legal_name ? `<div class="pf-legal">Legal name: ${v(l.legal_name)}</div>` : ""}
+      <div class="pf-section"><div class="pf-h">Product categories</div>
+        ${cats.length ? `<div class="pf-chips">${cats.map(c => `<span class="pf-chip">${v(c)}</span>`).join("")}</div>` : '<span class="muted">Not recorded yet</span>'}</div>
+      <div class="pf-section"><div class="pf-h">Samples on memo</div>
+        ${(l.samples_on_memo || "").trim() ? `<div class="pf-memo">${v(l.samples_on_memo)}</div>` : '<span class="muted">None</span>'}</div>
+      <div class="pf-section"><div class="pf-h">Contacts</div>
+        ${contacts.length ? `<div class="pf-grid">${contactCards}</div>` : '<span class="muted">Not recorded yet</span>'}</div>
+      <div class="pf-section"><div class="pf-h">Shipping addresses</div>
+        ${ships.length ? `<div class="pf-grid">${shipCards}</div>` : '<span class="muted">Not recorded yet</span>'}</div>
+      ${(l.billing_address || "").trim() ? `<div class="pf-section"><div class="pf-h">Billing address</div><div class="pf-memo">${v(l.billing_address)}</div></div>` : ""}
+    </div>`;
+}
 
 function parseDate(s) { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); }
 function addDays(date, n) { const d = new Date(date); d.setDate(d.getDate() + n); return d; }
@@ -354,7 +399,7 @@ function renderCrm() {
   const yn = v => v ? '<span class="yn yes">&#10003;</span>' : '<span class="yn no">&mdash;</span>';
   const rows = visible.map(({ lead, next }) => `
     <tr class="${lead.priority ? "priority-row" : ""}">
-      <td class="company">${lead.priority ? '<span class="star" title="Priority">&#9733;</span>' : ""}${escapeHtml(lead.company)}</td>
+      <td class="company"><button type="button" class="profile-toggle${hasProfile(lead) ? " has-profile" : ""}" data-lead="${lead.id}" title="Client profile" aria-expanded="${expandedLeads.has(lead.id)}">${expandedLeads.has(lead.id) ? "&#9662;" : "&#9656;"}</button>${lead.priority ? '<span class="star" title="Priority">&#9733;</span>' : ""}${escapeHtml(lead.company)}${(lead.samples_on_memo || "").trim() ? ' <span class="memo-badge" title="Samples on memo">memo</span>' : ""}</td>
       <td class="muted">${escapeHtml(lead.country)}</td>
       <td>${escapeHtml(lead.contact)}</td>
       <td class="muted">${escapeHtml(lead.email)}</td>
@@ -367,6 +412,7 @@ function renderCrm() {
       <td>${actionCell(lead, next, today)}</td>
       <td class="notes-cell">${escapeHtml(lead.stage === "dead" && lead.lost_reason ? lead.lost_reason : lead.notes)}</td>
     </tr>
+    ${expandedLeads.has(lead.id) ? `<tr class="profile-row"><td colspan="12">${profilePanel(lead)}</td></tr>` : ""}
   `).join("");
   wrap.innerHTML = `
     <div class="table-scroll">
@@ -376,6 +422,13 @@ function renderCrm() {
     </table>
     </div>
   `;
+  wrap.querySelectorAll(".profile-toggle").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.lead;
+      if (expandedLeads.has(id)) expandedLeads.delete(id); else expandedLeads.add(id);
+      renderCrm();
+    });
+  });
 }
 
 // ---------- To-Do (shared outline format for every account) ----------

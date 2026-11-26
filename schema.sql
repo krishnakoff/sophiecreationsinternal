@@ -41,6 +41,16 @@ create table if not exists public.leads (
   updated_at timestamptz not null default now()
 );
 
+-- Client profile fields (migrations/2026-11-26-client-profiles.sql): what the client buys,
+-- samples held on memo, contact people and shipping profiles. Shown in the CRM profile panel.
+alter table public.leads
+  add column if not exists legal_name text default '',
+  add column if not exists product_categories text[] not null default '{}',
+  add column if not exists samples_on_memo text default '',
+  add column if not exists contacts jsonb not null default '[]'::jsonb,
+  add column if not exists shipping_addresses jsonb not null default '[]'::jsonb,
+  add column if not exists billing_address text default '';
+
 -- ---------- outbound_emails (per-person log of first-time-recipient emails) ----------
 -- Populated by Claude scanning Gmail on request (see CLAUDE.md) — not written by the web app.
 -- Drives the weekly "who reached out to how many people" rollup and flips a lead from

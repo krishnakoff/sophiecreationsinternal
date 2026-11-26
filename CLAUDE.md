@@ -178,6 +178,36 @@ Updating an existing lead (advancing its stage, setting a manual next action, ma
 dead+reason) is a PATCH to `$SUPABASE_URL/rest/v1/leads?id=eq.<id>` with just the changed
 fields.
 
+## Client profiles (categories, memo samples, contacts, shipping profiles)
+
+Each `leads` row doubles as the client's profile. These columns (migration
+`migrations/2026-11-26-client-profiles.sql`) are filled from chat / Gmail research and shown in
+the profile panel that opens when you click the ▸ next to a company on the CRM tab:
+
+- **`product_categories`** (`text[]`) — what the client buys or is developing with us, phrased the
+  way Krishna talks: e.g. Awe Inspired `["14K vermeil", "925 silver + e-coating"]`, Kirstin Ash
+  `["18K vermeil", "9K solid gold"]`, MBM `["Watches", "Tote bags", "18K vermeil with lab-grown
+  diamonds", "925 silver with rhodium flash", "925 silver with 14K yellow gold flash", ...]`. Be
+  specific about metal + plating + stone. **"What categories does X do?" → read this column first.**
+- **`samples_on_memo`** (`text`) — samples the client is holding on memo (what, when sent,
+  tracking). Empty = none. A non-empty value shows an amber "memo" badge next to the company.
+  **"Who has samples on memo?" → `leads?samples_on_memo=neq.&select=company,samples_on_memo`.**
+- **`contacts`** (`jsonb` array, in order = contact person 1, 2, 3 …):
+  `[{"name","role","email","phone"}]`. Keep the legacy `contact`/`email` columns pointing at
+  contact 1 so the CRM table and outbound matching keep working.
+- **`shipping_addresses`** (`jsonb` array = shipping profile 1, 2, 3 …; MBM has three):
+  `[{"label","company_name","contact_name","contact_number","email","address_line1",
+  "address_line2","city","state","postal_code","country","notes"}]` — `label` is the short name
+  ("New York office", "Allen Park warehouse"); put tax/EORI/importer IDs, delivery hours etc. in
+  `notes`. **"Give me MBM's shipping profiles" → read this column and list every field.**
+- **`billing_address`**, **`legal_name`** (`text`) — invoicing entity if it differs from the
+  trading name (e.g. MBM Diamonds invoices as MERD'S USA INC).
+
+Update with a PATCH on `leads?id=eq.<id>` sending the whole array (jsonb columns are replaced,
+not merged — read the current value first and append/edit). Don't guess any field: leave it
+blank rather than invent a phone number or postcode. These are client facts, so if the same
+company exists under both owners, keep them in sync.
+
 ## Outreach contact list (do-not-cold-email)
 
 Table `public.outreach_contacts` — one row per `entry` (a domain, an exact email, or a company

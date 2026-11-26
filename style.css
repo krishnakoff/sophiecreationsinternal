@@ -475,3 +475,22 @@ th.cash-amount{ font-family:var(--font-body); }
   .nx-item{ flex-basis:100%; }
   .nx-items .num-r{ margin-left:auto; }
 }
+
+/* ---------- CRM client profile panel ---------- */
+.profile-toggle{ background:none; border:0; padding:0 6px 0 0; cursor:pointer; color:var(--muted-2); font-size:11px; }
+.profile-toggle.has-profile{ color:var(--accent); }
+.memo-badge{ display:inline-block; margin-left:6px; padding:1px 6px; border-radius:999px; font-size:10.5px; font-weight:600; background:var(--amber-tint); color:var(--amber); vertical-align:middle; }
+.profile-row > td{ background:var(--panel-2); padding:14px 16px; }
+.profile-panel{ display:flex; flex-direction:column; gap:12px; white-space:normal; }
+.pf-legal{ font-size:12.5px; color:var(--muted); }
+.pf-h{ font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); margin-bottom:6px; }
+.pf-chips{ display:flex; flex-wrap:wrap; gap:6px; }
+.pf-chip{ padding:3px 9px; border-radius:999px; background:var(--accent-tint); color:var(--accent); font-size:12px; }
+.pf-memo{ font-size:13px; white-space:pre-wrap; max-width:900px; }
+.pf-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:10px; }
+.pf-card{ background:var(--panel); border:1px solid var(--hairline); border-radius:10px; padding:10px 12px; font-size:12.5px; }
+.pf-card-title{ font-weight:700; margin-bottom:6px; }
+.pf-field{ display:flex; gap:8px; padding:2px 0; }
+.pf-k{ flex:0 0 64px; color:var(--muted); }
+.pf-v{ flex:1; overflow-wrap:anywhere; }
+.pf-card a{ color:var(--accent); }
