@@ -27,6 +27,7 @@ let leads = [];
 let outlineNodes = [];
 let dailyMusts = [];
 let teamMembers = [];
+let ideas = [];
 let orders = [];
 let b2cOrders = [];
 let outreachContacts = [];
@@ -129,7 +130,7 @@ if (lastTab && document.getElementById("view-" + lastTab)) switchTab(lastTab);
 
 // ---------- data + realtime ----------
 async function loadAll() {
-  await Promise.all([loadLeads(), loadOutline(), loadOutboundStats(), loadMusts(), loadTeam(), loadOrders(), loadB2c(), loadCash(), loadOutreach(), loadNumbers()]);
+  await Promise.all([loadLeads(), loadOutline(), loadOutboundStats(), loadMusts(), loadTeam(), loadOrders(), loadB2c(), loadCash(), loadOutreach(), loadNumbers(), loadIdeas()]);
   subscribeRealtime();
 }
 
@@ -158,6 +159,9 @@ function subscribeRealtime() {
     .subscribe();
   sb.channel("public:team_members")
     .on("postgres_changes", { event: "*", schema: "public", table: "team_members" }, loadTeam)
+    .subscribe();
+  sb.channel("public:ideas")
+    .on("postgres_changes", { event: "*", schema: "public", table: "ideas" }, loadIdeas)
     .subscribe();
   sb.channel("public:orders")
     .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, loadOrders)
@@ -468,6 +472,34 @@ function renderTeam() {
   wrap.innerHTML = teamMembers.length
     ? `<div class="org-chart">${branch(childrenOf(null), new Set())}</div>`
     : `<div class="org-empty">No team members yet.</div>`;
+}
+
+// ---------- Ideas (things to build or try later) ----------
+// Company-wide like Team: everyone's ideas, newest first within status order. Read-only here —
+// ideas are added/updated from chat (see CLAUDE.md "Ideas").
+const IDEA_STATUSES = { idea: "Idea", planned: "Planned", in_progress: "In progress", done: "Done", parked: "Parked" };
+const IDEA_ORDER = ["in_progress", "planned", "idea", "parked", "done"];
+async function loadIdeas() {
+  const { data, error } = await sb.from("ideas").select("*").order("position").order("created_at", { ascending: false });
+  if (!error) { ideas = data || []; renderIdeas(); }
+  else console.error("loadIdeas:", error.message);
+}
+
+function renderIdeas() {
+  const wrap = document.getElementById("ideas-wrap");
+  if (!ideas.length) { wrap.innerHTML = '<div class="empty-state">No ideas yet.</div>'; return; }
+  const sorted = [...ideas].sort((a, b) => IDEA_ORDER.indexOf(a.status) - IDEA_ORDER.indexOf(b.status));
+  wrap.innerHTML = `<div class="ideas-grid">${sorted.map(i => `
+    <div class="idea-card">
+      <div class="idea-top">
+        <span class="idea-status s-${escapeHtml(i.status)}">${IDEA_STATUSES[i.status] || escapeHtml(i.status)}</span>
+        ${i.area ? `<span class="idea-area">${escapeHtml(i.area)}</span>` : ""}
+        <span class="idea-meta">${escapeHtml(ownerName(i.owner_id))} · ${new Date(i.created_at).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}</span>
+      </div>
+      <div class="idea-title">${escapeHtml(i.title)}</div>
+      ${i.details ? `<div class="idea-details">${escapeHtml(i.details)}</div>` : ""}
+      ${i.example ? `<div class="idea-example-label">Example</div><blockquote class="idea-example">${escapeHtml(i.example)}</blockquote>` : ""}
+    </div>`).join("")}</div>`;
 }
 
 // ---------- Orders ("waiting on" factories) ----------

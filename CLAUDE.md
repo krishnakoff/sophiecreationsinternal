@@ -774,6 +774,26 @@ curl -s -X POST "$SUPABASE_URL/rest/v1/team_members" \
        "candidate_id": "<candidates.id or null>"}'
 ```
 
+## Ideas tab (things to build or try later)
+
+Table `public.ideas` (migration `migrations/2026-11-26-ideas.sql`), shown on the **Ideas** tab as
+cards. Company-wide like Team: everyone signed in sees every idea; each row belongs to whoever
+added it (`owner_id`). When Krishna or Sanjay says "store this idea", "add to ideas", "park this
+for later" etc., insert a row — don't put it in the to-do list:
+
+- `title` — short name in their words (e.g. "B2B and B2C touch point email/message on holidays").
+- `area` — free text grouping, e.g. "B2B + B2C", "CRM / ERP", "Ops", "Marketing".
+- `details` — what they want and why, plus any constraints mentioned.
+- `example` — a message, link or reference that inspired it (quote it verbatim).
+- `status` — `idea` (default) → `planned` → `in_progress` → `done`, or `parked`.
+
+```bash
+curl -s -X POST "$SUPABASE_URL/rest/v1/ideas" \
+  -H "apikey: $SERVICE_KEY" -H "Authorization: Bearer $SERVICE_KEY" \
+  -H "Content-Type: application/json" -H "Prefer: return=representation" \
+  -d '{"owner_id": "<id>", "title": "...", "area": "...", "details": "...", "example": "..."}'
+```
+
 ## Other rules
 
 - Never touch the seed/schema RLS policies without checking with Krishna first — they're what
