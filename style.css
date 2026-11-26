@@ -494,3 +494,19 @@ th.cash-amount{ font-family:var(--font-body); }
 .pf-k{ flex:0 0 64px; color:var(--muted); }
 .pf-v{ flex:1; overflow-wrap:anywhere; }
 .pf-card a{ color:var(--accent); }
+
+/* ---------- Ideas tab ---------- */
+.ideas-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:14px; margin-top:12px; }
+.idea-card{ background:var(--panel); border:1px solid var(--hairline); border-radius:12px; padding:14px 16px; box-shadow:var(--shadow); }
+.idea-top{ display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-bottom:8px; }
+.idea-status{ padding:2px 8px; border-radius:999px; font-size:11px; font-weight:700; background:var(--accent-tint); color:var(--accent); }
+.idea-status.s-planned{ background:var(--sapphire-tint); color:var(--sapphire); }
+.idea-status.s-in_progress{ background:var(--amber-tint); color:var(--amber); }
+.idea-status.s-done{ background:var(--emerald-tint); color:var(--emerald); }
+.idea-status.s-parked{ background:var(--panel-2); color:var(--muted); }
+.idea-area{ padding:2px 8px; border-radius:999px; font-size:11px; background:var(--panel-2); color:var(--muted); }
+.idea-meta{ margin-left:auto; font-size:11.5px; color:var(--muted-2); }
+.idea-title{ font-family:var(--font-display); font-size:17px; font-weight:600; margin-bottom:6px; }
+.idea-details{ font-size:13px; color:var(--ink); white-space:pre-wrap; margin-bottom:8px; }
+.idea-example-label{ font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); margin:6px 0 4px; }
+.idea-example{ margin:0; padding:8px 12px; border-left:3px solid var(--accent); background:var(--panel-2); border-radius:0 8px 8px 0; font-size:13px; font-style:italic; white-space:pre-wrap; }
