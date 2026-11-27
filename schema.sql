@@ -49,7 +49,9 @@ alter table public.leads
   add column if not exists samples_on_memo text default '',
   add column if not exists contacts jsonb not null default '[]'::jsonb,
   add column if not exists shipping_addresses jsonb not null default '[]'::jsonb,
-  add column if not exists billing_address text default '';
+  add column if not exists billing_address text default '',
+  -- migrations/2026-11-27-pricing-rules.sql: internal markups/terms for quoting this client
+  add column if not exists pricing_rules text default '';
 
 -- ---------- outbound_emails (per-person log of first-time-recipient emails) ----------
 -- Populated by Claude scanning Gmail on request (see CLAUDE.md) — not written by the web app.
