@@ -231,7 +231,7 @@ const expandedLeads = new Set(); // lead ids whose client profile panel is open
 // Client profile panel (product categories, samples on memo, contacts, shipping profiles).
 // Data is written from chat (see CLAUDE.md "Client profiles"); the app only displays it.
 function hasProfile(l) {
-  return (l.product_categories || []).length || (l.samples_on_memo || "").trim() ||
+  return (l.product_categories || []).length || (l.samples_on_memo || "").trim() || (l.pricing_rules || "").trim() ||
     (l.contacts || []).length || (l.shipping_addresses || []).length || (l.billing_address || "").trim();
 }
 
@@ -262,6 +262,7 @@ function profilePanel(l) {
       ${l.legal_name ? `<div class="pf-legal">Legal name: ${v(l.legal_name)}</div>` : ""}
       <div class="pf-section"><div class="pf-h">Product categories</div>
         ${cats.length ? `<div class="pf-chips">${cats.map(c => `<span class="pf-chip">${v(c)}</span>`).join("")}</div>` : '<span class="muted">Not recorded yet</span>'}</div>
+      ${(l.pricing_rules || "").trim() ? `<div class="pf-section"><div class="pf-h">Pricing rules <span class="pf-internal">internal</span></div><div class="pf-memo pf-pricing">${v(l.pricing_rules)}</div></div>` : ""}
       <div class="pf-section"><div class="pf-h">Samples on memo</div>
         ${(l.samples_on_memo || "").trim() ? `<div class="pf-memo">${v(l.samples_on_memo)}</div>` : '<span class="muted">None</span>'}</div>
       <div class="pf-section"><div class="pf-h">Contacts</div>

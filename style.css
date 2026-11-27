@@ -510,3 +510,5 @@ th.cash-amount{ font-family:var(--font-body); }
 .idea-details{ font-size:13px; color:var(--ink); white-space:pre-wrap; margin-bottom:8px; }
 .idea-example-label{ font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); margin:6px 0 4px; }
 .idea-example{ margin:0; padding:8px 12px; border-left:3px solid var(--accent); background:var(--panel-2); border-radius:0 8px 8px 0; font-size:13px; font-style:italic; white-space:pre-wrap; }
+.pf-internal{ margin-left:6px; padding:1px 6px; border-radius:999px; background:#FCE5CD; color:#8a4a12; font-size:10px; letter-spacing:0; text-transform:none; }
+.pf-pricing{ background:var(--panel); border:1px solid var(--hairline); border-radius:10px; padding:10px 12px; }

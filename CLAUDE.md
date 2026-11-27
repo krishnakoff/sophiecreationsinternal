@@ -200,6 +200,12 @@ the profile panel that opens when you click the ▸ next to a company on the CRM
   "address_line2","city","state","postal_code","country","notes"}]` — `label` is the short name
   ("New York office", "Allen Park warehouse"); put tax/EORI/importer IDs, delivery hours etc. in
   `notes`. **"Give me MBM's shipping profiles" → read this column and list every field.**
+- **`pricing_rules`** (`text`, INTERNAL — migration `2026-11-27-pricing-rules.sql`) — how we price
+  this client: markup on factory cost (e.g. "factory cost × X, natural stones × Y"), FX rate
+  used, metal/plating assumptions, MOQ, mould fee, deposit and shipping terms. **Read it before any
+  quote or reprice for that client and apply the same rules**; when Krishna sets or changes a rule,
+  update this field (keep earlier rules unless he replaces them). Never paste it into anything
+  client-facing. Shown in the profile panel with an orange "internal" tag.
 - **`billing_address`**, **`legal_name`** (`text`) — invoicing entity if it differs from the
   trading name (e.g. MBM Diamonds invoices as MERD'S USA INC).
 
